@@ -1,0 +1,12 @@
+[submodule "danipa-fintech-service"]
+	path = danipa-fintech-service
+	url = git@github.com:paboagye/danipa-fintech-service.git
+	branch = main
+[submodule "danipa-config-server"]
+	path = danipa-config-server
+	url = git@github.com:paboagye/danipa-config-server.git
+	branch = main
+[submodule "danipa-eureka-server"]
+	path = danipa-eureka-server
+	url = git@github.com:paboagye/danipa-eureka-server.git
+	branch = main

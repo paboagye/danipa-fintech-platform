@@ -1,0 +1,18 @@
+services:
+  # Override examples for developer convenience
+
+  config-server:
+    environment:
+      # Example: use remote Git instead of local bind mount
+      # CONFIG_GIT_URI: "https://github.com/paboagye/danipa-config-repo.git"
+      # CONFIG_DEFAULT_LABEL: "main"
+      # CONFIG_USER: "cfg-user"
+      # CONFIG_PASS: "cfg-pass"
+      # CONFIG_ENCRYPT_KEY: "change-me"
+
+  fintech-service:
+    environment:
+      # Switch profile locally if desired
+      SPRING_PROFILES_ACTIVE: "dev"
+      # Example: set extra logging
+      # LOGGING_LEVEL_ROOT: "INFO"

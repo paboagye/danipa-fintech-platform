@@ -1,82 +1,128 @@
-version: '3.9'
-
 services:
+  # ---------- Kafka (KRaft single-node) ----------
   kafka:
     image: bitnami/kafka:3.6.2
-    container_name: kafka
+    container_name: danipa-bus-kafka
     environment:
       - KAFKA_ENABLE_KRAFT=yes
-      - KAFKA_CFG_PROCESS_ROLES=broker,controller
       - KAFKA_CFG_NODE_ID=1
-      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_CLUSTER_ID=CDV_9wo0TrSIkeeg6AcOUQ
+      - KAFKA_CFG_PROCESS_ROLES=broker,controller
       - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
       - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT
       - ALLOW_PLAINTEXT_LISTENER=yes
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+    volumes:
+      - bus-kafka-data:/bitnami/kafka
     ports:
       - "9092:9092"
     healthcheck:
-      test: ["CMD", "kafka-topics.sh", "--bootstrap-server=localhost:9092", "--list"]
-      interval: 20s
-      timeout: 10s
-      retries: 10
+      # absolute path; no shell needed
+      test: [ "CMD", "/opt/bitnami/kafka/bin/kafka-topics.sh", "--bootstrap-server=localhost:9092", "--list" ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 90s
 
+  # ---------- Config Server (same app as platform; default port is 8088) ----------
   config-server:
     build: ./danipa-config-server
-    container_name: config-server
+    container_name: danipa-bus-config-server
     environment:
-      - SPRING_PROFILES_ACTIVE=${CONFIG_BACKEND:-native}
-      - SPRING_CLOUD_CONFIG_SERVER_GIT_URI=${CONFIG_GIT_URI:-}
-      - SPRING_CLOUD_CONFIG_SERVER_GIT_DEFAULT_LABEL=${CONFIG_DEFAULT_LABEL:-main}
-      - SPRING_CLOUD_CONFIG_SERVER_GIT_USERNAME=${CONFIG_USER:-}
-      - SPRING_CLOUD_CONFIG_SERVER_GIT_PASSWORD=${CONFIG_PASS:-}
+      - SPRING_PROFILES_ACTIVE=native
+      # If you really want to expose 8888 instead, set this:
+      # - SERVER_PORT=8888
+      # and change the ports mapping below to "8888:8888"
+      - SPRING_CONFIG_LOCATION=classpath:/
       - SPRING_CLOUD_STREAM_KAFKA_BINDER_BROKERS=kafka:9092
       - MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health,info,refresh,busrefresh,env
+      # For native repo mounting:
+      - SPRING_CLOUD_CONFIG_SERVER_NATIVE_SEARCH_LOCATIONS=file:/config-repo
+      # Optional basic auth (match your app.yml if you enabled it)
+      - CONFIG_USER=cfg-user
+      - CONFIG_PASS=cfg-pass
     ports:
-      - "${CONFIG_PORT:-8888}:8888"
+      - "8088:8088"   # <-- keep 8088 unless you set SERVER_PORT above
     volumes:
-      - ./config-repo:/config-repo
+      - ./config-repo:/config-repo:ro
     depends_on:
       kafka:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8088/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 30s
 
+  # ---------- Eureka ----------
   eureka-server:
     build: ./danipa-eureka-server
-    container_name: eureka-server
+    container_name: danipa-bus-eureka-server
     environment:
       - SPRING_PROFILES_ACTIVE=default
+      - JAVA_TOOL_OPTIONS=-XX:+UseContainerSupport -XX:MaxRAMPercentage=75
     ports:
-      - "${EUREKA_PORT:-8761}:8761"
+      - "8761:8761"
     depends_on:
       config-server:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8761/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 40s
 
+  # ---------- Redis (bus stack) ----------
   redis:
     image: redis:7.4.5
-    container_name: redis
-    ports:
-      - "6379:6379"
+    container_name: danipa-bus-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    # Expose only if you need host access; otherwise comment out ports:
+    # ports:
+    #   - "6380:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+    volumes:
+      - bus-redis-data:/data
 
+  # ---------- Fintech Service ----------
   fintech-service:
     build: ./danipa-fintech-service
-    container_name: fintech-service
+    container_name: danipa-bus-fintech-service
     environment:
       - SPRING_PROFILES_ACTIVE=dev
-      - SPRING_CLOUD_CONFIG_URI=http://config-server:8888
+      - SPRING_CLOUD_CONFIG_URI=http://config-server:8088   # matches 8088 above
       - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://eureka-server:8761/eureka
-      - SPRING_REDIS_HOST=redis
+      - SPRING_DATA_REDIS_HOST=redis                        # fixed env name
+      - SPRING_DATA_REDIS_PORT=6379
       - SPRING_CLOUD_STREAM_KAFKA_BINDER_BROKERS=kafka:9092
       - MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health,info,refresh,busrefresh,env
+      - JAVA_TOOL_OPTIONS=-XX:+UseContainerSupport -XX:MaxRAMPercentage=75
     ports:
-      - "${FINTECH_PORT:-8080}:8080"
+      - "8080:8080"
     depends_on:
       config-server:
-        condition: service_started
+        condition: service_healthy
       eureka-server:
-        condition: service_started
+        condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 24
+      start_period: 60s
+
+volumes:
+  bus-kafka-data:
+  bus-redis-data:

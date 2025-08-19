@@ -1,0 +1,33 @@
+1) Clean slate (remove the half-formatted data)
+# stop the stack that used the bad ID
+docker compose -p danipa-bus -f docker-compose.bus.yml down
+
+# delete the Kafka data volume so Kafka can format cleanly
+docker volume rm danipa-bus_bus-kafka-data
+
+How to run this bus stack
+
+# from repo root
+docker compose -p danipa-bus -f docker-compose.bus.yml up -d
+
+# watch health
+docker ps --format "{{.Names}}\t{{.Status}}"
+
+# config server health
+curl http://localhost:8088/actuator/health
+
+# eureka ui
+start http://localhost:8761
+
+# fintech health
+curl http://localhost:8080/actuator/health
+
+
+
+Here’s a structured set of three tailored .env presets for your dev, staging, and prod environments. This way you can easily switch contexts by running:
+
+docker compose --env-file .env.dev    -f docker-compose.bus.yml up -d
+docker compose --env-file .env.staging -f docker-compose.bus.yml up -d
+docker compose --env-file .env.prod   -f docker-compose.bus.yml up -d
+
+

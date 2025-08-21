@@ -24,26 +24,29 @@ services:
     ports: ["8088:8088"]
     environment:
       SPRING_PROFILES_ACTIVE: native
-      SPRING_CONFIG_LOCATION: classpath:/
+      #SPRING_CONFIG_LOCATION: classpath:/
       CONFIG_USER: ${CONFIG_USER}
       CONFIG_PASS: ${CONFIG_PASS}
       SPRING_CLOUD_CONFIG_SERVER_NATIVE_SEARCH_LOCATIONS: "file:/config-repo,file:/config-repo/danipa-fintech-service,file:/config-repo/danipa-stripe-service,file:/config-repo/danipa-paypal-service"
+
+      # >>> Bus + Actuator exposure
+      SPRING_CLOUD_STREAM_KAFKA_BINDER_BROKERS: "kafka:9092"
+      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,env,refresh,busrefresh,configprops"
+
+      LOG_DIR: /app/logs/danipa-config-server
     volumes:
       - ./config-repo:/config-repo:ro
+      - ./logs/config:/app/logs/danipa-config-server
     healthcheck:
       test:
-        - CMD-SHELL
-        - |
-          if [ -n "$CONFIG_USER" ] && [ -n "$CONFIG_PASS" ]; then
-            AUTH_OPT=$(printf -- '-u %s:%s' "$CONFIG_USER" "$CONFIG_PASS");
-          else
-            AUTH_OPT="";
-          fi
-          curl -fsS -m 5 $$AUTH_OPT http://127.0.0.1:8088/actuator/health | grep -q '"status":"UP"'
+        [
+          "CMD-SHELL",
+          "AUTH_OPT=\"\"; if [ -n \"$${CONFIG_USER}\" ] && [ -n \"$${CONFIG_PASS}\" ]; then AUTH_OPT=\"-u $${CONFIG_USER}:$${CONFIG_PASS}\"; fi; /usr/bin/curl -fsS -m 5 $${AUTH_OPT} http://127.0.0.1:8088/actuator/health >/dev/null"
+        ]
       interval: 5s
       timeout: 5s
       retries: 12
-      start_period: 20s
+      start_period: 60s
     networks: [danipa-net]
     depends_on:
       redis:
@@ -58,7 +61,13 @@ services:
     container_name: danipa-eureka-server
     ports: ["8761:8761"]
     environment:
+      SPRING_PROFILES_ACTIVE: "${SPRING_PROFILES_ACTIVE:-dev}"
+      SPRING_CLOUD_CONFIG_URI: "http://config-server:8088"
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "http://eureka-server:8761/eureka"
       JAVA_TOOL_OPTIONS: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=75"
+      LOG_DIR: /app/logs/danipa-eureka-server
+    volumes:
+      - ./logs/eureka:/app/logs/danipa-eureka-server
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS -m 3 http://127.0.0.1:8761/actuator/health | grep -q '\"status\":\"UP\"'"]
       interval: 5s
@@ -79,27 +88,52 @@ services:
     container_name: danipa-fintech-service
     ports: ["8080:8080"]
     environment:
-      SPRING_CLOUD_CONFIG_URI: "http://config-server:8088"
       SPRING_PROFILES_ACTIVE: "${SPRING_PROFILES_ACTIVE:-dev}"
+      # Config Server
+      SPRING_CONFIG_IMPORT: "optional:configserver:"
+      SPRING_CLOUD_CONFIG_URI: "http://config-server:8088"
+      SPRING_CLOUD_CONFIG_USERNAME: "${CONFIG_USER}"
+      SPRING_CLOUD_CONFIG_PASSWORD: "${CONFIG_PASS}"
+      SPRING_APPLICATION_NAME: "danipa-fintech-service"
+
+      # Actuator
+      ACTUATOR_USER: "${ACTUATOR_USER:-act}"
+      ACTUATOR_PASS: "${ACTUATOR_PASS:-act-pass}"
+
+      # Service discovery
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "http://eureka-server:8761/eureka"
+
+      # Redis
       SPRING_DATA_REDIS_HOST: "redis"
       SPRING_DATA_REDIS_PORT: "6379"
-      JAVA_TOOL_OPTIONS: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=75"
 
-      # Logback file logging
-      LOGGING_FILE_PATH: /logs
-      LOGGING_FILE_NAME: danipa-fintech-service
+      # Kafka
+      SPRING_CLOUD_STREAM_KAFKA_BINDER_BROKERS: "kafka:9092"
+      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,metrics,env,refresh,busrefresh,beans,configprops,prometheus"
+
+      # Logging directory used by logback
+      LOG_DIR: /app/logs/danipa-fintech-service
 
       # Logstash TCP destination (Logback → Logstash)
       LOGGING_LOGSTASH_HOST: "logstash"
       LOGGING_LOGSTASH_PORT: "4560"
+
+      # JVM
+      JAVA_TOOL_OPTIONS: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=75"
     volumes:
-      - fintech-logs:/logs
+      - ./logs/fintech:/app/logs/danipa-fintech-service
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -m 3 http://127.0.0.1:8080/actuator/health | grep -q '\"status\":\"UP\"'"]
+      test:
+        [
+          "CMD-SHELL",
+          # 1) wait for the app to bind the port, then
+          # 2) call readiness with basic auth and require HTTP 200
+          "timeout 3 bash -lc '</dev/tcp/127.0.0.1/8080' \
+               && [ \"$(curl -sS -u \"$${ACTUATOR_USER}:$${ACTUATOR_PASS}\" -o /dev/null -w \"%{http_code}\" http://127.0.0.1:8080/api/actuator/health/readiness)\" = 200 ]"
+        ]
       interval: 10s
       timeout: 5s
-      retries: 12
+      retries: 60
       start_period: 60s
     depends_on:
       eureka-server:
@@ -111,6 +145,8 @@ services:
       logstash:
         condition: service_healthy
       elasticsearch:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
     networks: [danipa-net]
     restart: unless-stopped
@@ -172,10 +208,39 @@ services:
     networks: [danipa-net]
     restart: unless-stopped
 
+  # ----------- Kafka (single-node KRaft) -----------
+  kafka:
+    image: bitnami/kafka:3.6.2
+    container_name: kafka
+    environment:
+      - KAFKA_ENABLE_KRAFT=yes
+      - KAFKA_CFG_NODE_ID=1
+      - KAFKA_KRAFT_CLUSTER_ID=CDV_9wo0TrSIkeeg6AcOUQ     # any stable 22-char base64-ish id
+      - KAFKA_CFG_PROCESS_ROLES=broker,controller
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+    ports:
+      - "9092:9092"     # optional; needed only if you want host access
+    volumes:
+      - bus-kafka-data:/bitnami/kafka
+    healthcheck:
+      test: [ "CMD", "/opt/bitnami/kafka/bin/kafka-topics.sh", "--bootstrap-server=localhost:9092", "--list" ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 90s
+    networks: [danipa-net]
+    restart: unless-stopped
 volumes:
   redis-data:
-  fintech-logs:
   es-data:
+  bus-kafka-data:
 
 networks:
   danipa-net:

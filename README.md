@@ -85,7 +85,7 @@ Each service uses **bootstrap.properties** or **application.properties** for con
 **Example – Fintech Service**:
 ```properties
 spring.application.name=danipa-fintech-service
-spring.cloud.config.uri=http://localhost:8888
+spring.cloud.config.uri=http://localhost:8088
 spring.profiles.active=dev
 ```
 
@@ -126,7 +126,7 @@ docker-compose up --build
 ```
 
 This will bring up:  
-- `danipa-config-server` → **port 8888**  
+- `danipa-config-server` → **port 8088**  
 - `danipa-eureka-server` → **port 8761**  
 - `danipa-fintech-service` → **port 8080**  
 

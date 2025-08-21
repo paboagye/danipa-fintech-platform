@@ -13,6 +13,7 @@ services:
     volumes:
       - redis-data:/data
     networks: [danipa-net]
+    restart: unless-stopped
 
   # ----------- Config Server -----------
   config-server:
@@ -23,16 +24,22 @@ services:
     ports: ["8088:8088"]
     environment:
       SPRING_PROFILES_ACTIVE: native
-      SPRING_CONFIG_LOCATION: classpath:/    # keep: prevents /config-repo/*.yml from being read as app config
-      # optional basic auth for /actuator/env etc. (matches application.yml defaults)
-      CONFIG_USER: cfg-user
-      CONFIG_PASS: cfg-pass
-      # controls native search locations (optional; matches application-native.yml default)
+      SPRING_CONFIG_LOCATION: classpath:/
+      CONFIG_USER: ${CONFIG_USER}
+      CONFIG_PASS: ${CONFIG_PASS}
       SPRING_CLOUD_CONFIG_SERVER_NATIVE_SEARCH_LOCATIONS: "file:/config-repo,file:/config-repo/danipa-fintech-service,file:/config-repo/danipa-stripe-service,file:/config-repo/danipa-paypal-service"
     volumes:
       - ./config-repo:/config-repo:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8088/actuator/health | grep -q '\"status\":\"UP\"' || exit 1"]
+      test:
+        - CMD-SHELL
+        - |
+          if [ -n "$CONFIG_USER" ] && [ -n "$CONFIG_PASS" ]; then
+            AUTH_OPT=$(printf -- '-u %s:%s' "$CONFIG_USER" "$CONFIG_PASS");
+          else
+            AUTH_OPT="";
+          fi
+          curl -fsS -m 5 $$AUTH_OPT http://127.0.0.1:8088/actuator/health | grep -q '"status":"UP"'
       interval: 5s
       timeout: 5s
       retries: 12
@@ -41,56 +48,59 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    restart: unless-stopped
 
   # ----------- Eureka Server -----------
   eureka-server:
     build:
-      context: ./danipa-eureka-server            # Dockerfile at module root
+      context: ./danipa-eureka-server
       dockerfile: Dockerfile
     container_name: danipa-eureka-server
     ports: ["8761:8761"]
     environment:
       JAVA_TOOL_OPTIONS: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=75"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8761/actuator/health | grep -q '\"status\":\"UP\"'"]
+      test: ["CMD-SHELL", "curl -fsS -m 3 http://127.0.0.1:8761/actuator/health | grep -q '\"status\":\"UP\"'"]
       interval: 5s
       timeout: 5s
       retries: 24
-      start_period: 40s
+      start_period: 60s
     networks: [danipa-net]
     depends_on:
       config-server:
         condition: service_healthy
+    restart: unless-stopped
 
   # ----------- Fintech Service (MoMo) -----------
   fintech-service:
     build:
-      context: ./danipa-fintech-service          # Dockerfile at module root
+      context: ./danipa-fintech-service
       dockerfile: Dockerfile
     container_name: danipa-fintech-service
     ports: ["8080:8080"]
     environment:
-      # Point to Config Server inside the compose network
       SPRING_CLOUD_CONFIG_URI: "http://config-server:8088"
-      # If your config repo uses non-main branch:
-      # SPRING_CLOUD_CONFIG_LABEL: "${SPRING_CLOUD_CONFIG_LABEL:-main}"
-
-      # Activate environment profile (dev|local|prod)
       SPRING_PROFILES_ACTIVE: "${SPRING_PROFILES_ACTIVE:-dev}"
-
-      # Eureka registration
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "http://eureka-server:8761/eureka"
-
-      # Redis connection
       SPRING_DATA_REDIS_HOST: "redis"
       SPRING_DATA_REDIS_PORT: "6379"
-
-      # JVM ergonomics in containers (optional)
       JAVA_TOOL_OPTIONS: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=75"
 
-      # If Config Server has Basic Auth (uncomment to match your config)
-      # SPRING_CLOUD_CONFIG_USERNAME: "${CONFIG_USER:-configuser}"
-      # SPRING_CLOUD_CONFIG_PASSWORD: "${CONFIG_PASS:-configpass}"
+      # Logback file logging
+      LOGGING_FILE_PATH: /logs
+      LOGGING_FILE_NAME: danipa-fintech-service
+
+      # Logstash TCP destination (Logback → Logstash)
+      LOGGING_LOGSTASH_HOST: "logstash"
+      LOGGING_LOGSTASH_PORT: "4560"
+    volumes:
+      - fintech-logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -m 3 http://127.0.0.1:8080/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
     depends_on:
       eureka-server:
         condition: service_healthy
@@ -98,10 +108,74 @@ services:
         condition: service_healthy
       config-server:
         condition: service_healthy
+      logstash:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
     networks: [danipa-net]
+    restart: unless-stopped
+
+  # ----------- Logstash -----------
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.14.2
+    container_name: logstash
+    expose: ["4560", "9600"]          # reachable on the bridge network
+    volumes:
+      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - ./logstash/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+    environment:
+      LS_JAVA_OPTS: "-Xms256m -Xmx256m"
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS -m 5 http://127.0.0.1:9600/_node | grep -Eq "\"status\":\"(green|yellow)\""' ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks: [danipa-net]
+    restart: unless-stopped
+
+  # ----------- Elasticsearch (single-node dev) -----------
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.14.2
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false       # dev only (no auth)
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -m 5 http://127.0.0.1:9200/_cluster/health | grep -Eq '\"status\":\"(green|yellow)\"'"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+    networks: [danipa-net]
+    restart: unless-stopped
+
+  # ----------- Kibana -----------
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.14.2
+    container_name: kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    volumes:
+      - ./kibana/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks: [danipa-net]
+    restart: unless-stopped
 
 volumes:
   redis-data:
+  fintech-logs:
+  es-data:
 
 networks:
   danipa-net:

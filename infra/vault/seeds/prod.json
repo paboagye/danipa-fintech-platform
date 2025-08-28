@@ -1,0 +1,28 @@
+{
+  "secrets": {
+    "config": {
+      "CONFIG_USER": "cfg-user",
+      "CONFIG_PASS": "cfg-pass"
+    },
+    "actuator": {
+      "ACTUATOR_USER": "act",
+      "ACTUATOR_PASS": "act-pass"
+    },
+    "postgres": {
+      "POSTGRES_USER_DEV": "danipa_owner_dev",
+      "POSTGRES_PASSWORD_DEV": "changeMeDev!",
+      "POSTGRES_DB_DEV": "danipa_dev",
+      "POSTGRES_APP_USER_DEV": "danipa_app_dev",
+      "POSTGRES_APP_PASS_DEV": "changeMeDevApp!",
+      "PG_PORT_DEV": "5433"
+    },
+    "momo": {
+      "MOMO_API_USER_ID": "8bf1d43e-4904-46cb-a373-5c6e7a3f1c51",
+      "MOMO_API_KEY": "93a8c1131f3f456fa92d9357d3b35bb9",
+      "MOMO_REMITTANCE_SUBSCRIPTION_KEY": "9f391c3324f243c3a0cd7d4c23beb3d4",
+      "MOMO_COLLECTION_SUBSCRIPTION_KEY": "c8c2e471a7944e928658e98de626f0c3",
+      "MOMO_DISBURSEMENTS_SUBSCRIPTION_KEY": "d7bacc337f0143beb8b34f46f4c31288",
+      "MOMO_CALLBACK_URL": "https://api.danipa.com/ms/{provider}/{eventType}/{referenceId}"
+    }
+  }
+}

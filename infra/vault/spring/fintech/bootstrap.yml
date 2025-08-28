@@ -1,0 +1,14 @@
+spring:
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  cloud:
+    vault:
+      uri: ${VAULT_URI:http://vault:8200}
+      kv:
+        backend: secret
+        default-context: danipa/fintech
+        profile-separator: ","
+      authentication: APPROLE
+      app-role:
+        role-id: ${VAULT_ROLE_ID:${FINTECH_VAULT_ROLE_ID:}}
+        secret-id: ${VAULT_SECRET_ID:${FINTECH_VAULT_SECRET_ID:}}

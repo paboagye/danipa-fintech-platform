@@ -1,0 +1,11 @@
+$VAULT = 'http://127.0.0.1:18300'
+$ROOT  = 'CHANGE_ME'   # from vault.init.txt
+$headersRoot = @{ 'X-Vault-Token' = $ROOT }
+
+$tokResp = Invoke-RestMethod -Method POST `
+  -Uri "$VAULT/v1/auth/token/create" `
+  -Headers $headersRoot -ContentType 'application/json' `
+  -Body (@{ policies = @('config-reader'); ttl = '24h' } | ConvertTo-Json)
+
+$READER = $tokResp.auth.client_token
+"Reader token: $READER"

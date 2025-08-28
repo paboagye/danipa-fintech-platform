@@ -1,0 +1,5 @@
+.\verify-config-server.ps1 `
+  -ConfigUser 'cfg-user' `
+  -ConfigPass 'cfg-pass' `
+  -RoleId 'f79de526-233e-8a42-8fce-f563d4291cd6' `
+  -SecretId '69a56837-73f4-5c7e-b9fd-202845800e3c'

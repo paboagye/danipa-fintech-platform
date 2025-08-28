@@ -1,0 +1,31 @@
+services:
+  vault:
+    image: hashicorp/vault:1.16
+    container_name: danipa-vault
+    command: [ "server", "-log-level=info" ]
+    environment:
+      VAULT_API_ADDR: "http://127.0.0.1:18300"
+      VAULT_LOCAL_CONFIG: |
+        {
+          "ui": true,
+          "disable_mlock": true,
+          # CHANGED: listen on 8200 inside the container (not 8300)
+          "listener": [{ "tcp": { "address": "0.0.0.0:8200", "tls_disable": true } }],
+          "storage": { "file": { "path": "/vault/data" } }
+        }
+    ports:
+      - "18300:8200"
+    cap_add:
+      - IPC_LOCK
+    volumes:
+      - vault-data:/vault/data
+    healthcheck:
+      test: [ "CMD", "sh", "-c", "curl -fsS http://127.0.0.1:8200/v1/sys/health || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [ danipa-net ]
+    restart: unless-stopped
+
+volumes:
+  vault-data:

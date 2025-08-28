@@ -1,0 +1,22 @@
+
+title: Danipa Financial Technology Platform
+description: Secure, cloud-native payment infrastructure for Africa
+theme: minima
+logo: /assets/img/logo.png
+header_pages:
+  - platform.md
+  - developers.md
+  - roadmap.md
+  - about.md
+google_analytics:
+# Set a baseurl if hosting under a project path (e.g., /danipa-site). Leave blank for apex domain or custom domain.
+baseurl: ""
+url: "https://danipa.com"
+markdown: kramdown
+kramdown:
+  input: GFM
+minima:
+  skin: classic
+  social_links:
+    - { platform: github,  user_url: "https://github.com/paboagye" }
+    - { platform: linkedin, user_url: "https://www.linkedin.com/in/patrickaboagye" }

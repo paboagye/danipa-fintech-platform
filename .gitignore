@@ -2,3 +2,8 @@ config-repo
 .idea/.gitignore
 .idea/misc.xml
 .idea/vcs.xml
+logs/
+app.jar
+.env
+.env.*
+infra/vault/WRITE_DEV_SEEDS_NOTES.txt

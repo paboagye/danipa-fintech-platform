@@ -1,3 +1,5 @@
+# ![Danipa Logo](images/danipa_logo.png)
+
 # SUBMODULES.md
 
 ## Overview

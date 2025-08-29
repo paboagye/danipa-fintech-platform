@@ -3,16 +3,16 @@ services:
   redis:
     image: redis:7.4.5
     container_name: redis
-    command: ["redis-server", "--appendonly", "yes"]
-    ports: ["6379:6379"]
+    command: [ "redis-server", "--appendonly", "yes" ]
+    ports: [ "6379:6379" ]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
       timeout: 3s
       retries: 30
     volumes:
       - redis-data:/data
-    networks: [danipa-net]
+    networks: [ danipa-net ]
     restart: unless-stopped
 
   # ----------- Infra: Vault -----------
@@ -51,9 +51,9 @@ services:
       context: ./danipa-config-server
       dockerfile: Dockerfile
     container_name: danipa-config-server
-    ports: ["8088:8088"]
+    ports: [ "8088:8088" ]
     environment:
-      SPRING_PROFILES_ACTIVE: "${SPRING_PROFILES_ACTIVE:-composite}"
+      SPRING_PROFILES_ACTIVE: "composite"
 
       # === Vault (in-cluster address) ===
       VAULT_HOST: ${VAULT_HOST:-danipa-vault}
@@ -67,7 +67,10 @@ services:
       CONFIG_GIT_URI: ${CONFIG_GIT_URI}
       CONFIG_DEFAULT_LABEL: ${CONFIG_DEFAULT_LABEL:-main}
 
-      SPRING_CLOUD_CONFIG_SERVER_NATIVE_SEARCH_LOCATIONS: "file:/config-repo,file:/config-repo/danipa-fintech-service,file:/config-repo/danipa-stripe-service,file:/config-repo/danipa-paypal-service"
+      SPRING_CLOUD_CONFIG_SERVER_NATIVE_SEARCH_LOCATIONS: |
+        file:/config-repo
+        file:/config-repo/danipa-fintech-service
+        file:/config-repo/danipa-eureka-server
 
       # 🔐 Git for composite git repo
       GIT_USER: "${GIT_USER}"
@@ -81,7 +84,7 @@ services:
       SPRING_CLOUD_CONFIG_SERVER_COMPOSITE_0_DEFAULT_LABEL: ${CONFIG_DEFAULT_LABEL:-main}
 
       # 🔎 THIS is the missing piece:
-      SPRING_CLOUD_CONFIG_SERVER_COMPOSITE_0_SEARCH_PATHS: "danipa-fintech-service,config-server,eureka-server"
+      SPRING_CLOUD_CONFIG_SERVER_COMPOSITE_0_SEARCH_PATHS: "{application}"
 
       # >>> Bus + Actuator exposure
       SPRING_CLOUD_STREAM_KAFKA_BINDER_BROKERS: "${SPRING_CLOUD_STREAM_KAFKA_BINDER_BROKERS:-kafka:9092}"
@@ -94,12 +97,16 @@ services:
       - ./config-repo:/config-repo
       - ./logs/config:/app/logs/danipa-config-server
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8088/actuator/health/liveness || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS -u $${CONFIG_USER}:$${CONFIG_PASS} http://127.0.0.1:8088/actuator/health | grep -q '\"status\":\"UP\"'"
+        ]
       interval: 5s
       timeout: 5s
       retries: 12
       start_period: 60s
-    networks: [danipa-net]
+    networks: [ danipa-net ]
     depends_on:
       redis:
         condition: service_healthy
@@ -113,22 +120,46 @@ services:
       context: ./danipa-eureka-server
       dockerfile: Dockerfile
     container_name: danipa-eureka-server
-    ports: ["8761:8761"]
+    ports: [ "8761:8761" ]
     environment:
-      SPRING_PROFILES_ACTIVE: "${SPRING_PROFILES_ACTIVE:-dev}"
+      SPRING_PROFILES_ACTIVE: "${APP_ENV:-dev}"
+
+      # Pull config from Config Server (internal URL on the network)
+      SPRING_CONFIG_IMPORT: "optional:configserver:"
       SPRING_CLOUD_CONFIG_URI: "${SPRING_CLOUD_CONFIG_URI:-http://config-server:8088}"
+      SPRING_CLOUD_CONFIG_USERNAME: "${CONFIG_USER}"
+      SPRING_CLOUD_CONFIG_PASSWORD: "${CONFIG_PASS}"
+      CONFIG_USER: "${CONFIG_USER}"
+      CONFIG_PASS: "${CONFIG_PASS}"
+
+      # app identity must match your config-repo folder
+      SPRING_APPLICATION_NAME: "danipa-eureka-server"
+
+      # Eureka basics
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:-http://eureka-server:8761/eureka}"
+
+      # Actuator exposure (ensure /actuator/health is reachable)
+      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,env"
+
+      # JVM + logs
       JAVA_TOOL_OPTIONS: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=75"
       LOG_DIR: /app/logs/danipa-eureka-server
     volumes:
       - ./logs/eureka:/app/logs/danipa-eureka-server
+
+    # JSON-truthy healthcheck (aligned with others)
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -m 3 http://127.0.0.1:8761/actuator/health | grep -q '\"status\":\"UP\"'"]
-      interval: 5s
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS -u $${CONFIG_USER}:$${CONFIG_PASS} http://127.0.0.1:8761/actuator/health | grep -q '\"status\":\"UP\"'"
+        ]
+      interval: 10s
       timeout: 5s
       retries: 24
       start_period: 60s
-    networks: [danipa-net]
+
+    networks: [ danipa-net ]
     depends_on:
       config-server:
         condition: service_healthy
@@ -144,7 +175,7 @@ services:
       - "8080:8080"  #app
       - "5005:5005"  #debug
     environment:
-      SPRING_PROFILES_ACTIVE: "${SPRING_PROFILES_ACTIVE:-dev}"
+      SPRING_PROFILES_ACTIVE: "${APP_ENV:-dev}"
 
       # Config Server
       SPRING_CONFIG_IMPORT: "optional:configserver:"
@@ -155,8 +186,8 @@ services:
       SPRING_APPLICATION_NAME: "danipa-fintech-service"
 
       # Actuator
-      ACTUATOR_USER: "${ACTUATOR_USER:-act}"
-      ACTUATOR_PASS: "${ACTUATOR_PASS:-act-pass}"
+      ACTUATOR_USER: "${ACTUATOR_USER}"
+      ACTUATOR_PASS: "${ACTUATOR_PASS}"
 
       # Service discovery
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:-http://eureka-server:8761/eureka}"
@@ -192,7 +223,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "code=$(curl -sS -u \"$${ACTUATOR_USER}:$${ACTUATOR_PASS}\" -o /dev/null -w \"%{http_code}\" http://127.0.0.1:8080/ms/actuator/health/readiness); [ \"$$code\" = \"200\" ]"
+          "curl -fsS -u \"$${ACTUATOR_USER}:$${ACTUATOR_PASS}\" http://127.0.0.1:8080/ms/actuator/health/readiness | grep -q '\"status\":\"UP\"'"
         ]
       interval: 10s
       timeout: 5s
@@ -211,28 +242,28 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
-    networks: [danipa-net]
+    networks: [ danipa-net ]
     restart: unless-stopped
 
   # ----------- Logstash -----------
   logstash:
     image: docker.elastic.co/logstash/logstash:8.14.2
     container_name: logstash
-    expose: ["4560", "9600"]          # reachable on the bridge network
+    expose: [ "4560", "9600" ]          # reachable on the bridge network
     volumes:
       - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
       - ./logstash/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
     environment:
       LS_JAVA_OPTS: "-Xms256m -Xmx256m"
     healthcheck:
-      test: ['CMD-SHELL', 'curl -fsS -m 5 http://127.0.0.1:9600/_node | grep -Eq "\"status\":\"(green|yellow)\""' ]
+      test: [ 'CMD-SHELL', 'curl -fsS -m 5 http://127.0.0.1:9600/_node | grep -Eq "\"status\":\"(green|yellow)\""' ]
       interval: 10s
       timeout: 5s
       retries: 12
     depends_on:
       elasticsearch:
         condition: service_healthy
-    networks: [danipa-net]
+    networks: [ danipa-net ]
     restart: unless-stopped
 
   # ----------- Elasticsearch (single-node dev) -----------
@@ -248,11 +279,11 @@ services:
     volumes:
       - es-data:/usr/share/elasticsearch/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -m 5 http://127.0.0.1:9200/_cluster/health | grep -Eq '\"status\":\"(green|yellow)\"'"]
+      test: [ "CMD-SHELL", "curl -fsS -m 5 http://127.0.0.1:9200/_cluster/health | grep -Eq '\"status\":\"(green|yellow)\"'" ]
       interval: 10s
       timeout: 10s
       retries: 20
-    networks: [danipa-net]
+    networks: [ danipa-net ]
     restart: unless-stopped
 
   # ----------- Kibana -----------
@@ -268,7 +299,7 @@ services:
     depends_on:
       elasticsearch:
         condition: service_healthy
-    networks: [danipa-net]
+    networks: [ danipa-net ]
     restart: unless-stopped
 
   # ----------- Kafka (single-node KRaft) -----------
@@ -298,7 +329,7 @@ services:
       timeout: 5s
       retries: 20
       start_period: 90s
-    networks: [danipa-net]
+    networks: [ danipa-net ]
     restart: unless-stopped
 
   postgres-dev:

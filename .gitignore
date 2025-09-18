@@ -6,4 +6,7 @@ logs/
 app.jar
 .env
 .env.*
-infra/vault/WRITE_DEV_SEEDS_NOTES.txt
+infra/vault/WRITE_SECRETS.txt
+
+# vault keys
+infra/vault/keys/

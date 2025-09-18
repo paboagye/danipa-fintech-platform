@@ -1,4 +1,10 @@
-http.host: "0.0.0.0"
-config.reload.automatic: true
-pipeline.id: danipa-pipeline
-pipeline.workers: 1
+node.name: logstash
+path.data: /usr/share/logstash/data
+pipeline.ordered: auto
+
+# Node API (replaces old http.host-style settings)
+api.http.host: 0.0.0.0
+api.http.port: 9600
+
+log.level: info
+xpack.monitoring.enabled: false

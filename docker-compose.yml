@@ -1,49 +1,77 @@
 services:
-  # ----------- Infra: Redis -----------
-  redis:
-    image: redis:7.4.5
-    container_name: redis
-    command: [ "redis-server", "--appendonly", "yes" ]
-    ports: [ "6379:6379" ]
+  # ----------- Keycloak -----------
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.3.3
+    container_name: keycloak
+    command: ["start-dev","--http-port=8080","--hostname-strict=false","--http-management-port=9000","--health-enabled=true"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    ports: ["8082:8080","9001:9000"]
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
-      interval: 5s
-      timeout: 3s
+      test:
+        [
+          "CMD-SHELL",
+          "bash -lc 'exec 3<>/dev/tcp/127.0.0.1/9000; printf \"GET /health/ready HTTP/1.0\\r\\n\\r\\n\" >&3; head -n 1 <&3 | grep -q \" 200 \"'"
+        ]
+      interval: 10s
+      timeout: 5s
       retries: 30
-    volumes:
-      - redis-data:/data
+
+  # ----------- Redis -----------
+  redis:
+    image: redis:8.2
+    container_name: redis
+    command: ["redis-server","--appendonly","yes"]
+    ports: ["6379:6379"]
+    healthcheck:
+      test: [ "CMD","redis-cli","ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
     networks: [ danipa-net ]
     restart: unless-stopped
 
-  # ----------- Infra: Vault -----------
+  # ----------- Vault -----------
   vault:
-    image: hashicorp/vault:1.16
+    image: hashicorp/vault:1.20.3
     container_name: danipa-vault
-    command: [ "server", "-log-level=info" ]
+    command: [ "server","-log-level=info" ]
     environment:
       VAULT_API_ADDR: "http://vault:8200"
       VAULT_LOCAL_CONFIG: |
-        {
-          "ui": true,
-          "disable_mlock": true,
-          "listener": [
-            { "tcp": { "address": "0.0.0.0:8200", "tls_disable": true } }
-          ],
-          "storage": { "file": { "path": "/vault/data" } }
-        }
-    ports:
-      - "18300:8200"
+        { "ui": true, "disable_mlock": true,
+          "listener": [{ "tcp": { "address": "0.0.0.0:8200", "tls_disable": true } }],
+          "storage": { "file": { "path": "/vault/data" } } }
+    ports: [ "18300:8200" ]
     cap_add: [ "IPC_LOCK" ]
-    volumes:
-      - vault-data:/vault/data
+    volumes: [ "vault-data:/vault/data" ]
     healthcheck:
-      test: [ "CMD", "vault", "status", "-address=http://127.0.0.1:8200" ]
+      # exit 0 (active) or 2 (standby) are both OK for us
+      test: [ "CMD-SHELL", "vault status -address=http://127.0.0.1:8200 >/dev/null 2>&1; ec=$$?; [ $$ec -eq 0 -o $$ec -eq 2 ]" ]
       interval: 10s
       timeout: 5s
-      retries: 12
-      start_period: 20s
+      retries: 30
+      start_period: 15s
     networks: [ danipa-net ]
     restart: unless-stopped
+
+  # ----------- Vault Init/Unseal (one-shot helper) -----------
+  vault-init:
+    image: alpine:3.20
+    depends_on:
+      vault:
+        condition: service_healthy
+    environment:
+      # used only as a default; we also pass --vault-addr explicitly
+      VAULT_ADDR: "http://vault:8200"
+    volumes:
+      - ./infra/vault/scripts:/work:ro
+      - ./infra/vault/keys:/keys
+    entrypoint: [ "/bin/sh","-lc" ]
+    command: >
+      apk add --no-cache curl jq >/dev/null 2>&1 || true;
+      /work/init-unseal.sh --vault-addr http://vault:8200 --outfile /keys/vault-keys.json
 
   # ----------- Config Server -----------
   config-server:
@@ -54,355 +82,259 @@ services:
     ports: [ "8088:8088" ]
     environment:
       SPRING_PROFILES_ACTIVE: "composite"
-
-      # === Vault (in-cluster address) ===
-      VAULT_HOST: ${VAULT_HOST:-danipa-vault}
-      VAULT_PORT: ${VAULT_PORT:-8200}
-      VAULT_ROLE_ID: ${VAULT_ROLE_ID}
-      VAULT_SECRET_ID: ${VAULT_SECRET_ID}
-
-      # >>> Config Server
-      CONFIG_USER: ${CONFIG_USER}
-      CONFIG_PASS: ${CONFIG_PASS}
-      CONFIG_GIT_URI: ${CONFIG_GIT_URI}
-      CONFIG_DEFAULT_LABEL: ${CONFIG_DEFAULT_LABEL:-main}
-
-      SPRING_CLOUD_CONFIG_SERVER_NATIVE_SEARCH_LOCATIONS: |
-        file:/config-repo
-        file:/config-repo/danipa-fintech-service
-        file:/config-repo/danipa-eureka-server
-
-      # 🔐 Git for composite git repo
-      GIT_USER: "${GIT_USER}"
-      GIT_TOKEN: "${GIT_TOKEN}"
-
-      # composite[0] is your GIT entry:
-      SPRING_CLOUD_CONFIG_SERVER_COMPOSITE_0_TYPE: git
-      SPRING_CLOUD_CONFIG_SERVER_COMPOSITE_0_URI: ${CONFIG_GIT_URI}
-      SPRING_CLOUD_CONFIG_SERVER_COMPOSITE_0_USERNAME: ${GIT_USER}
-      SPRING_CLOUD_CONFIG_SERVER_COMPOSITE_0_PASSWORD: ${GIT_TOKEN}
-      SPRING_CLOUD_CONFIG_SERVER_COMPOSITE_0_DEFAULT_LABEL: ${CONFIG_DEFAULT_LABEL:-main}
-
-      # 🔎 THIS is the missing piece:
-      SPRING_CLOUD_CONFIG_SERVER_COMPOSITE_0_SEARCH_PATHS: "{application}"
-
-      # >>> Bus + Actuator exposure
-      SPRING_CLOUD_STREAM_KAFKA_BINDER_BROKERS: "${SPRING_CLOUD_STREAM_KAFKA_BINDER_BROKERS:-kafka:9092}"
-      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "${MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE:-health,info,env,refresh,busrefresh,configprops}"
-      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_CLOUD_CONFIG_SERVER: "${LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_CLOUD_CONFIG_SERVER:-DEBUG}"
-      LOGGING_LEVEL_ORG_ECLIPSE_JGIT: TRACE
-
+      SPRING_CONFIG_IMPORT: "optional:vault://"
+      SPRING_CLOUD_VAULT_URI: "http://vault:8200"
+      SPRING_CLOUD_VAULT_AUTHENTICATION: "TOKEN"
+      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,env,refresh,configprops"
+      MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED: "true"
+      MANAGEMENT_HEALTH_VAULT_ENABLED: "false"
       LOG_DIR: /app/logs/danipa-config-server
+      JAVA_TOOL_OPTIONS: >-
+        -XX:+UseContainerSupport
+        -XX:MaxRAMPercentage=75
+        -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005
     volumes:
       - ./config-repo:/config-repo
       - ./logs/config:/app/logs/danipa-config-server
+      - config_secrets:/opt/secrets:ro
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "curl -fsS -u $${CONFIG_USER}:$${CONFIG_PASS} http://127.0.0.1:8088/actuator/health | grep -q '\"status\":\"UP\"'"
-        ]
-      interval: 5s
+      test: [ "CMD-SHELL","curl -fsS http://127.0.0.1:8088/actuator/health | grep -q 'UP'" ]
+      interval: 10s
       timeout: 5s
-      retries: 12
-      start_period: 60s
-    networks: [ danipa-net ]
+      retries: 30
     depends_on:
-      redis:
-        condition: service_healthy
-      vault:
-        condition: service_started
+      vault: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      config-server-agent: { condition: service_healthy }
+    networks: [ danipa-net ]
+    restart: unless-stopped
+
+  # ----------- Config Server Agent (Vault) -----------
+  config-server-agent:
+    image: hashicorp/vault:1.20.3
+    container_name: config-server-agent
+    entrypoint:
+      - sh
+      - -lc
+      - |
+        set -eu
+        mkdir -p /opt/secrets
+        chmod 0755 /opt/secrets || true
+        chown -R vault:vault /opt/secrets || true
+        (
+          while true; do
+            for f in /opt/secrets/.vault-token /opt/secrets/config-client.env; do
+              [ -f "$$f" ] || continue
+              chown 999:999 "$$f" 2>/dev/null || true
+              chmod 0644 "$$f" 2>/dev/null || true
+            done
+            sleep 1
+          done
+        ) &
+        exec vault agent -config=/vault/agent.hcl -log-level=info
+    environment:
+      VAULT_ADDR: "http://vault:8200"
+      VAULT_APP_PATH: "danipa-config-server,composite"
+    cap_add: [ "IPC_LOCK" ]
+    volumes:
+      - config_secrets:/opt/secrets
+      - ./infra/vault/approle/config-server-dev:/vault/approle:ro
+      - ./infra/vault/templates:/vault/templates:ro
+      - ./infra/vault/agents/config-server-agent.hcl:/vault/agent.hcl:ro
+    healthcheck:
+      test: [ "CMD-SHELL", "test -s /opt/secrets/.vault-token -a -s /opt/secrets/config-client.env" ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      vault: { condition: service_healthy }
+    networks: [ danipa-net ]
     restart: unless-stopped
 
   # ----------- Eureka Server -----------
   eureka-server:
     build:
       context: ./danipa-eureka-server
-      dockerfile: Dockerfile
     container_name: danipa-eureka-server
     ports: [ "8761:8761" ]
     environment:
       SPRING_PROFILES_ACTIVE: "${APP_ENV:-dev}"
-
-      # Pull config from Config Server (internal URL on the network)
       SPRING_CONFIG_IMPORT: "optional:configserver:"
       SPRING_CLOUD_CONFIG_URI: "${SPRING_CLOUD_CONFIG_URI:-http://config-server:8088}"
-      SPRING_CLOUD_CONFIG_USERNAME: "${CONFIG_USER}"
-      SPRING_CLOUD_CONFIG_PASSWORD: "${CONFIG_PASS}"
-      CONFIG_USER: "${CONFIG_USER}"
-      CONFIG_PASS: "${CONFIG_PASS}"
-
-      # app identity must match your config-repo folder
       SPRING_APPLICATION_NAME: "danipa-eureka-server"
-
-      # Eureka basics
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:-http://eureka-server:8761/eureka}"
-
-      # Actuator exposure (ensure /actuator/health is reachable)
-      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,env"
-
-      # JVM + logs
-      JAVA_TOOL_OPTIONS: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=75"
       LOG_DIR: /app/logs/danipa-eureka-server
     volumes:
       - ./logs/eureka:/app/logs/danipa-eureka-server
-
-    # JSON-truthy healthcheck (aligned with others)
+      - eureka_secrets:/opt/secrets:ro
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "curl -fsS -u $${CONFIG_USER}:$${CONFIG_PASS} http://127.0.0.1:8761/actuator/health | grep -q '\"status\":\"UP\"'"
+          "bash -lc 'exec 3<>/dev/tcp/127.0.0.1/8761; printf \"GET /actuator/health HTTP/1.0\\r\\n\\r\\n\" >&3; head -n 1 <&3 | grep -q \" 200 \"'"
         ]
       interval: 10s
       timeout: 5s
-      retries: 24
-      start_period: 60s
-
-    networks: [ danipa-net ]
+      retries: 30
     depends_on:
-      config-server:
-        condition: service_healthy
+      keycloak: { condition: service_healthy }
+      config-server: { condition: service_healthy }
+      eureka-agent: { condition: service_healthy }
+    networks: [ danipa-net ]
     restart: unless-stopped
 
-  # ----------- Fintech Service (MoMo) -----------
+  # ----------- Eureka Agent (Vault) -----------
+  eureka-agent:
+    image: hashicorp/vault:1.20.3
+    container_name: eureka-agent
+    entrypoint:
+      - sh
+      - -lc
+      - |
+        set -eu
+        mkdir -p /opt/secrets
+        chown -R vault:vault /opt/secrets
+        exec vault agent -config=/vault/agent.hcl -log-level=info
+    environment:
+      VAULT_ADDR: "http://vault:8200"
+    cap_add: [ "IPC_LOCK" ]
+    volumes:
+      - eureka_secrets:/opt/secrets
+      - ./infra/vault/approle/eureka-dev:/vault/approle:ro
+      - ./infra/vault/templates:/vault/templates:ro
+      - ./infra/vault/agents/eureka-agent.hcl:/vault/agent.hcl:ro
+    healthcheck:
+      test: [ "CMD-SHELL", "test -s /opt/secrets/.vault-token -a -s /opt/secrets/config-client.env" ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      vault: { condition: service_healthy }
+    networks: [ danipa-net ]
+    restart: unless-stopped
+
+  # ----------- Fintech Service -----------
   fintech-service:
     build:
       context: ./danipa-fintech-service
-      dockerfile: Dockerfile
     container_name: danipa-fintech-service
-    ports:
-      - "8080:8080"  #app
-      - "5005:5005"  #debug
+    ports: [ "8080:8080", "5005:5005" ]
     environment:
       SPRING_PROFILES_ACTIVE: "${APP_ENV:-dev}"
-
-      # Config Server
       SPRING_CONFIG_IMPORT: "optional:configserver:"
       SPRING_CLOUD_CONFIG_URI: "${SPRING_CLOUD_CONFIG_URI:-http://config-server:8088}"
-      SPRING_CLOUD_CONFIG_USERNAME: "${CONFIG_USER}"
-      SPRING_CLOUD_CONFIG_PASSWORD: "${CONFIG_PASS}"
-      SPRING_CLOUD_CONFIG_TOKEN: "${SPRING_CLOUD_CONFIG_TOKEN}"
       SPRING_APPLICATION_NAME: "danipa-fintech-service"
-
-      # Actuator
-      ACTUATOR_USER: "${ACTUATOR_USER}"
-      ACTUATOR_PASS: "${ACTUATOR_PASS}"
-
-      # Service discovery
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:-http://eureka-server:8761/eureka}"
-
-      # Redis
-      SPRING_DATA_REDIS_HOST: "${SPRING_DATA_REDIS_HOST:-redis}"
-      SPRING_DATA_REDIS_PORT: "${SPRING_DATA_REDIS_PORT:-6379}"
-
-      # Kafka
-      SPRING_CLOUD_STREAM_KAFKA_BINDER_BROKERS: "${SPRING_CLOUD_STREAM_KAFKA_BINDER_BROKERS:-kafka:9092}"
-      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "${MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE:-health,info,metrics,env,refresh,busrefresh,beans,configprops,prometheus}"
-
-      # Postgres (dev profile)
-      SPRING_DATASOURCE_URL: "${SPRING_DATASOURCE_URL:-jdbc:postgresql://postgres-dev:5432/danipa_dev}"
-      SPRING_DATASOURCE_USERNAME: "${SPRING_DATASOURCE_USERNAME:-danipa_app_dev}"
-      SPRING_DATASOURCE_PASSWORD: "${SPRING_DATASOURCE_PASSWORD:-changeMeDevApp!}"
-
-      # Logging directory used by logback
       LOG_DIR: /app/logs/danipa-fintech-service
-
-      # Logstash TCP destination (Logback → Logstash)
-      LOGGING_LOGSTASH_HOST: "${LOGGING_LOGSTASH_HOST:-logstash}"
-      LOGGING_LOGSTASH_PORT: "${LOGGING_LOGSTASH_PORT:-4560}"
-
-      # JVM
-      JAVA_TOOL_OPTIONS: >-
-        -XX:+UseContainerSupport
-        -XX:MaxRAMPercentage=75
-        -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005
     volumes:
       - ./logs/fintech:/app/logs/danipa-fintech-service
+      - fintech_secrets:/opt/secrets:ro
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "curl -fsS -u \"$${ACTUATOR_USER}:$${ACTUATOR_PASS}\" http://127.0.0.1:8080/ms/actuator/health/readiness | grep -q '\"status\":\"UP\"'"
+          "bash -lc 'exec 3<>/dev/tcp/127.0.0.1/8080; printf \"GET /actuator/health HTTP/1.0\\r\\n\\r\\n\" >&3; head -n 1 <&3 | grep -q \" 200 \"'"
         ]
       interval: 10s
       timeout: 5s
-      retries: 60
-      start_period: 60s
+      retries: 30
     depends_on:
-      eureka-server:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      config-server:
-        condition: service_healthy
-      logstash:
-        condition: service_healthy
-      elasticsearch:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
+      eureka-server: { condition: service_healthy }
+      config-server: { condition: service_healthy }
+      fintech-agent: { condition: service_healthy }
     networks: [ danipa-net ]
     restart: unless-stopped
 
-  # ----------- Logstash -----------
-  logstash:
-    image: docker.elastic.co/logstash/logstash:8.14.2
-    container_name: logstash
-    expose: [ "4560", "9600" ]          # reachable on the bridge network
-    volumes:
-      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
-      - ./logstash/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+  # ----------- Fintech Agent (Vault) -----------
+  fintech-agent:
+    image: hashicorp/vault:1.20.3
+    container_name: fintech-agent
+    entrypoint:
+      - sh
+      - -lc
+      - |
+        set -eu
+        mkdir -p /opt/secrets
+        chown -R vault:vault /opt/secrets
+        exec vault agent -config=/vault/agent.hcl -log-level=info
     environment:
-      LS_JAVA_OPTS: "-Xms256m -Xmx256m"
-    healthcheck:
-      test: [ 'CMD-SHELL', 'curl -fsS -m 5 http://127.0.0.1:9600/_node | grep -Eq "\"status\":\"(green|yellow)\""' ]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
-    networks: [ danipa-net ]
-    restart: unless-stopped
-
-  # ----------- Elasticsearch (single-node dev) -----------
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.14.2
-    container_name: elasticsearch
-    environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false       # dev only (no auth)
-      - ES_JAVA_OPTS=-Xms512m -Xmx512m
-    ports:
-      - "9200:9200"
+      VAULT_ADDR: "http://vault:8200"
+    cap_add: [ "IPC_LOCK" ]
     volumes:
-      - es-data:/usr/share/elasticsearch/data
+      - fintech_secrets:/opt/secrets
+      - ./infra/vault/approle/fintech-dev:/vault/approle:ro
+      - ./infra/vault/templates:/vault/templates:ro
+      - ./infra/vault/agents/fintech-agent.hcl:/vault/agent.hcl:ro
     healthcheck:
-      test: [ "CMD-SHELL", "curl -fsS -m 5 http://127.0.0.1:9200/_cluster/health | grep -Eq '\"status\":\"(green|yellow)\"'" ]
-      interval: 10s
-      timeout: 10s
+      test: [ "CMD-SHELL", "test -s /opt/secrets/.vault-token -a -s /opt/secrets/config-client.env" ]
+      interval: 5s
+      timeout: 3s
       retries: 20
-    networks: [ danipa-net ]
-    restart: unless-stopped
-
-  # ----------- Kibana -----------
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.14.2
-    container_name: kibana
-    environment:
-      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-    ports:
-      - "5601:5601"
-    volumes:
-      - ./kibana/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
     depends_on:
-      elasticsearch:
-        condition: service_healthy
+      vault: { condition: service_healthy }
     networks: [ danipa-net ]
     restart: unless-stopped
 
-  # ----------- Kafka (single-node KRaft) -----------
-  kafka:
-    image: bitnami/kafka:3.6.2
-    container_name: kafka
-    environment:
-      - KAFKA_ENABLE_KRAFT=yes
-      - KAFKA_CFG_NODE_ID=1
-      - KAFKA_KRAFT_CLUSTER_ID=CDV_9wo0TrSIkeeg6AcOUQ     # any stable 22-char base64-ish id
-      - KAFKA_CFG_PROCESS_ROLES=broker,controller
-      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
-      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
-      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
-      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
-      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
-      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT
-      - ALLOW_PLAINTEXT_LISTENER=yes
-      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
-    ports:
-      - "9092:9092"     # optional; needed only if you want host access
-    volumes:
-      - bus-kafka-data:/bitnami/kafka
-    healthcheck:
-      test: [ "CMD", "/opt/bitnami/kafka/bin/kafka-topics.sh", "--bootstrap-server=localhost:9092", "--list" ]
-      interval: 10s
-      timeout: 5s
-      retries: 20
-      start_period: 90s
-    networks: [ danipa-net ]
-    restart: unless-stopped
-
+  # ----------- Postgres (dev) -----------
   postgres-dev:
-    image: postgres:17
+    image: postgres:17.6
     profiles: [ "dev" ]
     container_name: danipa-postgres-dev
-    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER_DEV:-danipa_owner_dev}
+      POSTGRES_DB: ${POSTGRES_DB_DEV:-danipa_fintech_db_dev}
+      POSTGRES_PASSWORD_FILE: /opt/pg-secrets/POSTGRES_PASSWORD
     ports:
       - "${PG_PORT_DEV:-5433}:5432"
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER_DEV}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD_DEV}
-      POSTGRES_DB: ${POSTGRES_DB_DEV}
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER_DEV} -d ${POSTGRES_DB_DEV} -h localhost" ]
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h localhost" ]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
     volumes:
       - pgdata_dev:/var/lib/postgresql/data
       - ./init/dev:/docker-entrypoint-initdb.d:ro
       - ./backups/dev:/backups
+      - pg_secrets:/opt/pg-secrets:rw
+    depends_on:
+      postgres-agent: { condition: service_healthy }
     networks: [ danipa-net ]
-
-  postgres-staging:
-    image: postgres:17
-    profiles: [ "staging" ]
-    container_name: danipa-postgres-staging
     restart: unless-stopped
-    ports:
-      - "${PG_PORT_STG:-5434}:5432"
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER_STG}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD_STG}
-      POSTGRES_DB: ${POSTGRES_DB_STG}
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER_STG} -d ${POSTGRES_DB_STG} -h localhost" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    volumes:
-      - pgdata_staging:/var/lib/postgresql/data
-      - ./init/staging:/docker-entrypoint-initdb.d:ro
-      - ./backups/staging:/backups
-    networks: [ danipa-net ]
 
-  postgres-prod:
-    image: postgres:17
-    profiles: [ "prod" ]
-    container_name: danipa-postgres-prod
+  postgres-agent:
+    image: hashicorp/vault:1.20.3
+    container_name: postgres-agent
+    entrypoint:
+      - sh
+      - -lc
+      - |
+        set -eu
+        mkdir -p /opt/pg-secrets
+        chown -R vault:vault /opt/pg-secrets
+        exec vault agent -config=/vault/agent.hcl -log-level=info
+    environment:
+      VAULT_ADDR: "http://vault:8200"
+    cap_add: [ "IPC_LOCK" ]
+    volumes:
+      - pg_secrets:/opt/pg-secrets
+      - ./infra/vault/approle/fintech-dev:/vault/approle:ro
+      - ./infra/vault/templates:/vault/templates:ro
+      - ./infra/vault/agents/postgres-agent.hcl:/vault/agent.hcl:ro
+    healthcheck:
+      test: [ "CMD-SHELL","test -s /opt/pg-secrets/POSTGRES_PASSWORD" ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      vault: { condition: service_healthy }
+    networks: [ danipa-net ]
     restart: unless-stopped
-    ports:
-      - "${PG_PORT_PRD:-5435}:5432"
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER_PRD}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD_PRD}
-      POSTGRES_DB: ${POSTGRES_DB_PRD}
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER_PRD} -d ${POSTGRES_DB_PRD} -h localhost" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    volumes:
-      - pgdata_prod:/var/lib/postgresql/data
-      - ./init/prod:/docker-entrypoint-initdb.d:ro
-      - ./backups/prod:/backups
-    networks: [ danipa-net ]
 
-  # Optional: pgAdmin for local convenience
+  # ----------- pgAdmin (optional for dev) -----------
   pgadmin:
-    image: dpage/pgadmin4:8
+    image: dpage/pgadmin4:9.8
     container_name: danipa-pgadmin
-    profiles: [ "dev" ]               # <— add this
+    profiles: [ "dev" ]
     restart: unless-stopped
     environment:
       PGADMIN_DEFAULT_EMAIL: patrick@danipa.com
@@ -417,6 +349,110 @@ services:
       postgres-dev:
         condition: service_healthy
     networks: [ danipa-net ]
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -fsS http://127.0.0.1:8081/misc/ping || exit 1" ]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  # ----------- Logstash -----------
+  logstash:
+    image: docker.elastic.co/logstash/logstash:9.1.3
+    container_name: logstash
+    expose:
+      - "4560"   # JSON/TCP input for app logs (internal only)
+      - "9600"   # Node API (internal only)
+    volumes:
+      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - ./logstash/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+    environment:
+      LS_JAVA_OPTS: "-Xms256m -Xmx256m"
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -fsS -m 5 http://127.0.0.1:9600/_node | grep -Eq '\"status\":\"(green|yellow)\"'" ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks: [ danipa-net ]
+    restart: unless-stopped
+
+  # ----------- Elasticsearch -----------
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.1.3
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -fsS -m 5 http://127.0.0.1:9200/_cluster/health | grep -Eq '\"status\":\"(green|yellow)\"'" ]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+    networks: [ danipa-net ]
+
+  # ----------- Kibana -----------
+  kibana:
+    image: docker.elastic.co/kibana/kibana:9.1.3
+    container_name: kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    volumes:
+      - ./kibana/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
+    healthcheck:
+      # available once Kibana is up; OK if it takes a while on first boot
+      test: [ "CMD-SHELL", "curl -fsS http://127.0.0.1:5601/api/status | grep -q '\"level\":\"available\"'" ]
+      interval: 20s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks: [ danipa-net ]
+    restart: unless-stopped
+
+  # ----------- Kafka -----------
+  kafka:
+    image: bitnami/kafka:3.9
+    container_name: kafka
+    environment:
+      - KAFKA_ENABLE_KRAFT=yes
+      - KAFKA_CFG_NODE_ID=1
+      - KAFKA_KRAFT_CLUSTER_ID=CDV_9wo0TrSIkeeg6AcOUQ
+      - KAFKA_CFG_PROCESS_ROLES=broker,controller
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+    ports:
+      - "9092:9092"
+    volumes:
+      - bus-kafka-data:/bitnami/kafka
+    healthcheck:
+      test: [ "CMD", "/opt/bitnami/kafka/bin/kafka-topics.sh", "--bootstrap-server=localhost:9092", "--list" ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 90s
+    networks: [ danipa-net ]
+    restart: unless-stopped
 
 volumes:
   redis-data:
@@ -427,6 +463,12 @@ volumes:
   pgdata_staging:
   pgdata_prod:
   pgadmin_data:
+  config_secrets:
+    external: true
+    name: config_secrets
+  pg_secrets:
+  eureka_secrets:
+  fintech_secrets:
 
 networks:
   danipa-net:

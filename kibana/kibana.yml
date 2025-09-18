@@ -1,4 +1,10 @@
+# kibana/kibana.yml  (for 9.1.3)
 server.host: "0.0.0.0"
-server.shutdownTimeout: "5s"
 elasticsearch.hosts: ["http://elasticsearch:9200"]
-telemetry.enabled: false
+
+# If Elasticsearch security is ON (default in many setups), add creds:
+# elasticsearch.username: "kibana_system"
+# elasticsearch.password: "<password>"
+
+# If you turned ES security OFF (xpack.security.enabled=false on ES),
+# do NOT set any xpack.security.* keys here.

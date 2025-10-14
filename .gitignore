@@ -37,3 +37,6 @@ pgadmin/servers.json.bak
 
 # Catch weird stray unicode filename (the quoted ✓ file)
 *\342\234\205*
+
+# external repo (not a submodule)
+danipa-fintech-documents/

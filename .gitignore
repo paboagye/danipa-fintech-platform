@@ -10,3 +10,30 @@ infra/vault/WRITE_SECRETS.txt
 
 # vault keys
 infra/vault/keys/
+# IDE / local
+.idea/
+.docker-nocreds/
+.provpass
+OK
+chmod
+dos2unix
+results.txt
+secret-rewrites.regex
+
+# DB backups and misc
+backups/
+out/
+
+# Step-ca / certs / truststores (generated & secrets)
+infra/step/
+infra/certs/
+infra/acme/
+infra/java-truststores/
+infra/config-server/tls/
+
+# Vault (ALL of it must stay out)
+infra/vault/
+pgadmin/servers.json.bak
+
+# Catch weird stray unicode filename (the quoted ✓ file)
+*\342\234\205*

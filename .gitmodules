@@ -10,3 +10,5 @@
 	path = danipa-eureka-server
 	url = git@github.com:paboagye/danipa-eureka-server.git
 	branch = main
+[submodule "danipa-fintech-documents"]
+	branch = main

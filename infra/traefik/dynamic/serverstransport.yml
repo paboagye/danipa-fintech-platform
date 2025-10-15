@@ -1,0 +1,6 @@
+http:
+  serversTransports:
+    stepca:
+      rootCAs:
+        - /ca/root_ca.crt
+      serverName: vault

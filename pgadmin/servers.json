@@ -1,31 +1,13 @@
 {
-  "Servers": {
-    "1": {
-      "Name": "Danipa-Postgres-Dev",
-      "Group": "Danipa",
-      "Host": "postgres-dev",
-      "Port": 5432,
-      "MaintenanceDB": "postgres",
-      "Username": "danipa_owner_dev",
-      "SSLMode": "prefer"
-    },
-    "2": {
-      "Name": "Danipa-Postgres-Staging",
-      "Group": "Danipa",
-      "Host": "postgres-staging",
-      "Port": 5432,
-      "MaintenanceDB": "postgres",
-      "Username": "danipa_owner_stg",
-      "SSLMode": "prefer"
-    },
-    "3": {
-      "Name": "Danipa-Postgres-Prod",
-      "Group": "Danipa",
-      "Host": "postgres-prod",
-      "Port": 5432,
-      "MaintenanceDB": "postgres",
-      "Username": "danipa_owner_prd",
-      "SSLMode": "prefer"
-    }
-  }
+"Servers": {
+"1": {
+"Group": "Danipa",
+"Name": "Postgres-Dev",
+"Host": "danipa-postgres-dev",
+"Port": 5432,
+"MaintenanceDB": "danipa_fintech_db_dev",
+"Username": "danipa_owner_dev",
+"SSLMode": "prefer"
+}
+}
 }

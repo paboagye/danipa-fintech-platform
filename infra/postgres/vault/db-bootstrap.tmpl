@@ -1,0 +1,14 @@
+# Rendered by Vault Agent — Postgres bootstrap env
+ENVIRONMENT="{{ with secret (printf "secret/data/danipa/fintech/%s" (env "ENVIRONMENT" | default "dev")) }}{{ .Data.data.spring.flyway.placeholders.ENVIRONMENT }}{{ end | default "dev" }}"
+
+# Role names (override in Vault if your naming differs)
+APP_ROLE="danipa_app_dev"
+RO_ROLE="danipa_ro_dev"
+
+# Database & schema
+DB_NAME="danipa_fintech_db_dev"
+DB_SCHEMA="fintech"
+
+# Passwords
+APP_ROLE_PASSWORD="{{ with secret (printf "secret/data/danipa/fintech/%s" (env "ENVIRONMENT" | default "dev")) }}{{ .Data.data.spring.flyway.placeholders.DANIPA_APP_DEV_PASSWORD }}{{ end }}"
+RO_ROLE_PASSWORD="{{ with secret (printf "secret/data/danipa/fintech/%s" (env "ENVIRONMENT" | default "dev")) }}{{ .Data.data.spring.flyway.placeholders.DANIPA_RO_DEV_PASSWORD }}{{ end }}"

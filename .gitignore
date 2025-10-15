@@ -6,10 +6,8 @@ logs/
 app.jar
 .env
 .env.*
-infra/vault/WRITE_SECRETS.txt
 
 # vault keys
-infra/vault/keys/
 # IDE / local
 .idea/
 .docker-nocreds/
@@ -32,7 +30,6 @@ infra/java-truststores/
 infra/config-server/tls/
 
 # Vault (ALL of it must stay out)
-infra/vault/
 pgadmin/servers.json.bak
 
 # Catch weird stray unicode filename (the quoted ✓ file)
@@ -42,3 +39,11 @@ pgadmin/servers.json.bak
 # local env files (never commit real secrets)
 .env*
 dev.env
+
+# Ignore everything in vault except scripts
+infra/vault/*
+!infra/vault/scripts/
+!infra/vault/scripts/**
+
+# editor backups
+*.bak

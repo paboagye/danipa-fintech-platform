@@ -58,7 +58,7 @@ Vault will then restart and serve the new cert.
 
 ### 🔹 `make vault-status`
 
-Check Vault’s status **inside the container**. Ignores TLS verification.
+Check Vault’s **seal status** inside the container (ignores TLS verification).
 
 ```bash
 make vault-status
@@ -76,7 +76,6 @@ Sealed          false
 Total Shares    1
 Threshold       1
 Version         1.20.3
-Cluster Name    vault-cluster-8c87d10f
 ```
 
 ---
@@ -84,14 +83,18 @@ Cluster Name    vault-cluster-8c87d10f
 ### 🔹 `make vault-unseal`
 
 Unseal Vault manually if it comes up sealed.  
-You can either **pass the key via env** or let Make read it from `infra/vault/keys/vault-unseal.key`.
+Two ways to provide the key:
+
+**Option 1 – via environment variable**
 
 ```bash
-# Option 1: Using environment variable
-export UNSEAL_KEY=<your_unseal_key>
+export UNSEAL_KEY=rM1S/Gj9ClAWi4ZTJp/EIvSea03QW6WnWwZGbp+m1pM=
 make vault-unseal
+```
 
-# Option 2: Using default key file
+**Option 2 – via file (`infra/vault/keys/vault-unseal.key`)**
+
+```bash
 make vault-unseal
 ```
 
@@ -113,10 +116,12 @@ Version         1.20.3
 
 ### 🔹 `make vault-health`
 
-Check Vault’s **API health over TLS** with SNI pinned to your CN and the CA trusted.
+Check Vault’s **HTTPS API health endpoint** using the CA cert and pinned SNI.
 
 ```bash
 make vault-health
+# or override CN
+make vault-health CN=api.vault.local
 ```
 
 ✅ Example output:
@@ -132,10 +137,14 @@ make vault-health
 }
 ```
 
-You can also override the CN at runtime:
+---
+
+## 🔍 Verification
+
+After issuing and reloading, validate TLS and SANs manually:
 
 ```bash
-make vault-health CN=api.vault.local
+curl -sS --cacert infra/vault/tls/root_ca.crt   --resolve vault.local.danipa.com:18300:127.0.0.1   https://vault.local.danipa.com:18300/v1/sys/health | jq
 ```
 
 ---
@@ -145,10 +154,27 @@ make vault-health CN=api.vault.local
 - Always include **all SANs** Vault clients will use (`vault.local.danipa.com`, `vault`, `localhost`, cluster IPs).
 - Rotate Vault certs proactively before expiry.
 - Use `make vault-status` to confirm unseal state after restarts.
-- Use `make vault-health` to validate API TLS connectivity.
 - Use `vault-unsealer` (daemon) for automatic unsealing in production.
 
 ---
 
+## 🔧 Troubleshooting
+
+### Healthcheck & Startup Timing
+
+- The **`hashicorp/vault` image does not ship with `curl`**.  
+  → The container’s healthcheck uses `vault status -tls-skip-verify` instead.
+- After `docker compose up -d vault`, the container reports `(health: starting)` until:
+    1. The Vault process binds to `:8200`,
+    2. TLS listener is ready, and
+    3. The unseal key(s) are applied (by manual `make vault-unseal` or the unsealer daemon).
+- During this window:
+    - `make vault-health` may fail once with `connection refused` or `SSL_ERROR_SYSCALL`.
+    - Retrying after a few seconds should succeed.
+- This is expected startup race behavior.  
+  The container flips to **(healthy)** only once `Sealed=false`.
+
+---
+
 > **Summary**:  
-> This guide standardizes the workflow for **TLS certificate management in Vault**, ensuring smooth certificate rotation, container reloads, and health checks across the **Danipa Fintech Platform**.
+> This guide standardizes the workflow for **TLS certificate management in Vault**, ensuring smooth certificate rotation, container reloads, health checks, and unsealing across the **Danipa Fintech Platform**.

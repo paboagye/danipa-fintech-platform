@@ -1,13 +1,114 @@
 services:
+  # ----------- step-ca -----------
+  step-ca:
+    image: smallstep/step-ca:0.28.4
+    container_name: step-ca
+    command: [ "step-ca", "--password-file=/home/step/secrets/password", "/home/step/config/ca.json" ]
+    ports: [ "9000:9000" ]
+    volumes:
+      - ./infra/step:/home/step
+      - ./infra/vault/tls/root_ca.crt:/trust/root_ca.crt:ro
+    environment:
+      SSL_CERT_FILE: /trust/root_ca.crt
+      CURL_CA_BUNDLE: /trust/root_ca.crt
+      REQUESTS_CA_BUNDLE: /trust/root_ca.crt
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sk https://127.0.0.1:9000/health >/dev/null" ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks:
+      danipa-net:
+        aliases:
+          - step-ca.local.danipa.com
+    restart: unless-stopped
+
+  # ----------- traefik -----------
+  traefik:
+    build:
+      context: .
+      dockerfile: traefik.Dockerfile
+    image: danipa/traefik:3.5-curl
+    container_name: danipa-traefik
+    command:
+      - --log.level=DEBUG
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=danipa-net
+      - --providers.file.directory=/dynamic
+      - --providers.file.watch=true
+      # entrypoints
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.traefik.address=:8080
+      # API/Dashboard (dev only)
+      - --api.insecure=true
+      - --api.dashboard=true
+      # health ping
+      - --ping=true
+      - --ping.entrypoint=traefik
+      # ACME via step-ca
+      - --certificatesresolvers.localacme.acme.tlschallenge=true
+      - --certificatesresolvers.localacme.acme.email=dev@local.danipa.com
+      - --certificatesresolvers.localacme.acme.storage=/acme/acme.json
+      - --certificatesresolvers.localacme.acme.caserver=https://step-ca.local.danipa.com:9000/acme/acme/directory
+    ports:
+      - "443:443"
+      - "8080:8080"   # dashboard for debugging
+    environment:
+      SSL_CERT_FILE: /ca/root_ca.crt
+      SSL_CERT_DIR: /ca
+      LEGO_CA_CERTIFICATES: /ca/root_ca.crt
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - acme_storage:/acme
+      - ./infra/step/root_ca.crt:/ca/root_ca.crt:ro
+      - ./infra/traefik/dynamic:/dynamic:ro
+    depends_on:
+      step-ca:
+        condition: service_healthy
+    networks:
+      danipa-net:
+        aliases:
+          - keycloak.local.danipa.com
+          - vault.local.danipa.com
+          - config.local.danipa.com
+          - eureka.local.danipa.com
+          - fintech.local.danipa.com
+          - pgadmin.local.danipa.com
+          - kibana.local.danipa.com
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sf http://127.0.0.1:8080/ping >/dev/null" ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
   # ----------- Keycloak -----------
   keycloak:
     image: quay.io/keycloak/keycloak:26.3.3
     container_name: keycloak
-    command: ["start-dev","--http-port=8080","--hostname-strict=false","--http-management-port=9000","--health-enabled=true"]
+    command: [ "start-dev","--http-port=8080","--hostname-strict=false","--http-management-port=9000","--health-enabled=true" ]
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
-    ports: ["8082:8080","9001:9000"]
+      KC_PROXY: edge
+      KC_PROXY_HEADERS: xforwarded
+      KC_HOSTNAME_URL: https://keycloak.local.danipa.com
+      KC_HOSTNAME_ADMIN_URL: https://keycloak.local.danipa.com
+    ports: [ "8082:8080","9001:9000" ]   # optional in dev
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.keycloak.rule=Host(`keycloak.local.danipa.com`)"
+      - "traefik.http.routers.keycloak.entrypoints=websecure"
+      - "traefik.http.routers.keycloak.tls.certresolver=localacme"
+      - "traefik.http.services.keycloak.loadbalancer.server.port=8080"
+      - "traefik.http.middlewares.keycloak-root.redirectregex.regex=^/$"
+      - "traefik.http.middlewares.keycloak-root.redirectregex.replacement=/admin/"
+      - "traefik.http.middlewares.keycloak-root.redirectregex.permanent=true"
+      - "traefik.http.routers.keycloak.middlewares=keycloak-root@docker"
+    networks: [ danipa-net ]
     healthcheck:
       test:
         [
@@ -36,42 +137,87 @@ services:
   vault:
     image: hashicorp/vault:1.20.3
     container_name: danipa-vault
-    command: [ "server","-log-level=info" ]
+    entrypoint: ["vault"]
+    command: ["server", "-config=/vault/config"]
     environment:
-      VAULT_API_ADDR: "http://vault:8200"
-      VAULT_LOCAL_CONFIG: |
-        { "ui": true, "disable_mlock": true,
-          "listener": [{ "tcp": { "address": "0.0.0.0:8200", "tls_disable": true } }],
-          "storage": { "file": { "path": "/vault/data" } } }
+      SKIP_CHOWN: "true"
+      VAULT_API_ADDR: "https://vault:8200"
     ports: [ "18300:8200" ]
     cap_add: [ "IPC_LOCK" ]
-    volumes: [ "vault-data:/vault/data" ]
+    volumes:
+      - vault-data:/vault/data
+      - ./infra/vault/tls:/vault/tls:ro
+      - ./infra/vault/config:/vault/config:ro
+      - ./infra/vault/file:/vault/file
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.vault.rule=Host(`vault.local.danipa.com`)"
+      - "traefik.http.routers.vault.entrypoints=websecure"
+      - "traefik.http.routers.vault.tls=true"
+      - "traefik.http.routers.vault.tls.certresolver=localacme"
+      - "traefik.http.routers.vault.service=vault"
+      - "traefik.http.services.vault.loadbalancer.server.scheme=https"
+      - "traefik.http.services.vault.loadbalancer.server.port=8200"
+      - "traefik.http.services.vault.loadbalancer.serversTransport=stepca@file"
+      - "traefik.docker.network=danipa-net"
+    networks:
+      danipa-net:
+        aliases: [ "vault","danipa-vault" ]
     healthcheck:
-      # exit 0 (active) or 2 (standby) are both OK for us
-      test: [ "CMD-SHELL", "vault status -address=http://127.0.0.1:8200 >/dev/null 2>&1; ec=$$?; [ $$ec -eq 0 -o $$ec -eq 2 ]" ]
+      test:
+        [
+          "CMD-SHELL",
+          "VAULT_CACERT=/vault/tls/root_ca.crt vault status -address=https://127.0.0.1:8200 2>/dev/null \
+                 | awk '/^Sealed/ {print tolower($2)}' | grep -q '^false$'"
+        ]
       interval: 10s
       timeout: 5s
-      retries: 30
-      start_period: 15s
-    networks: [ danipa-net ]
+      retries: 18       # ~3 minutes of attempts
+      start_period: 30s # give Vault time to init & auto-unseal
     restart: unless-stopped
 
-  # ----------- Vault Init/Unseal (one-shot helper) -----------
-  vault-init:
-    image: alpine:3.20
+  # ----------- Auto-unsealer (daemon) -----------
+  vault-unsealer:
+    image: curlimages/curl:8.9.1
+    container_name: danipa-vault-unsealer
     depends_on:
       vault:
-        condition: service_healthy
-    environment:
-      # used only as a default; we also pass --vault-addr explicitly
-      VAULT_ADDR: "http://vault:8200"
+        condition: service_started
+    networks: [ danipa-net ]
+    secrets:
+      - source: vault_unseal_key
+        target: vault-unseal.key
     volumes:
-      - ./infra/vault/scripts:/work:ro
-      - ./infra/vault/keys:/keys
-    entrypoint: [ "/bin/sh","-lc" ]
-    command: >
-      apk add --no-cache curl jq >/dev/null 2>&1 || true;
-      /work/init-unseal.sh --vault-addr http://vault:8200 --outfile /keys/vault-keys.json
+      - ./infra/vault/tls/root_ca.crt:/ca/root_ca.crt:ro
+    entrypoint: >
+      sh -lc '
+        set -eu
+        CACERT=/ca/root_ca.crt
+        KEYS="$$(tr -d "\r" </run/secrets/vault-unseal.key)"
+        HOSTS="vault danipa-vault"
+      
+        echo "[unsealer] daemon started"
+        while :; do
+          for HOST in $$HOSTS; do
+            code="$$(curl --cacert "$$CACERT" -sS -m 2 --connect-timeout 2 \
+                     -o /dev/null -w "%{http_code}" https://$$HOST:8200/v1/sys/health || true)"
+            if [ "$$code" = 503 ]; then
+              echo "[unsealer] $$HOST sealed -> submitting keys"
+              sealed=true
+              echo "$$KEYS" | while IFS= read -r K; do
+                [ -n "$$K" ] || continue
+                resp="$$(curl --cacert "$$CACERT" -sS -X PUT -H "Content-Type: application/json" \
+                       -d "{\"key\":\"$$K\"}" https://$$HOST:8200/v1/sys/unseal || true)"
+                echo "[unsealer] response: $$resp"
+                echo "$$resp" | grep -q '"sealed":false' && sealed=false && break
+              done
+              [ "$$sealed" = false ] && echo "[unsealer] $$HOST unsealed"
+            fi
+          done
+          sleep 5
+        done
+      '
+    restart: unless-stopped
 
   # ----------- Config Server -----------
   config-server:
@@ -83,71 +229,77 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: "composite"
       SPRING_CONFIG_IMPORT: "optional:vault://"
-      SPRING_CLOUD_VAULT_URI: "http://vault:8200"
-      SPRING_CLOUD_VAULT_AUTHENTICATION: "TOKEN"
-      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,env,refresh,configprops"
+
+      # Vault client
+      SPRING_CLOUD_VAULT_URI: "https://vault.local.danipa.com"
+      SPRING_CLOUD_VAULT_AUTHENTICATION: "APPROLE"
+      SPRING_CLOUD_VAULT_KV_BACKEND: "secret"
+      SPRING_CLOUD_VAULT_KV_DEFAULT_CONTEXT: "danipa/config"
+      SPRING_CLOUD_VAULT_APP_ROLE_ROLE_ID_FILE: "/vault/approle/role_id"
+      SPRING_CLOUD_VAULT_APP_ROLE_SECRET_ID_FILE: "/vault/approle/secret_id"
+
+      # Truststore used ONLY by Spring Vault
+      SPRING_CLOUD_VAULT_SSL_TRUST_STORE: "file:/opt/truststores/vault-root.p12"
+      SPRING_CLOUD_VAULT_SSL_TRUST_STORE_PASSWORD: "changeit"
+      SPRING_CLOUD_VAULT_SSL_TRUST_STORE_TYPE: "PKCS12"
+
+      # Server TLS (unchanged)
+      SERVER_PORT: "8088"
+      SERVER_SSL_ENABLED: "true"
+      SERVER_SSL_CERTIFICATE: "file:/opt/tls/server-fullchain.crt"
+      SERVER_SSL_CERTIFICATE_PRIVATE_KEY: "file:/opt/tls/server.key"
+      MANAGEMENT_SERVER_PORT: "8088"
+
+      # Health / mgmt
+      SPRING_CLOUD_CONFIG_SERVER_HEALTH_ENABLED: "false"
+      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,env,refresh,configprops,loggers"
       MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED: "true"
       MANAGEMENT_HEALTH_VAULT_ENABLED: "false"
-      LOG_DIR: /app/logs/danipa-config-server
+
+      SPRING_CLOUD_CONFIG_SERVER_VAULT_SSL_TRUST_STORE: file:/opt/truststores/vault-root.p12
+      SPRING_CLOUD_CONFIG_SERVER_VAULT_SSL_TRUST_STORE_PASSWORD: changeit
+      SPRING_CLOUD_CONFIG_SERVER_VAULT_SSL_TRUST_STORE_TYPE: PKCS12
+
+      # Logging
+      SPRING_MAIN_LOG_STARTUP_INFO: "true"
+      DEBUG: "true"
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK: "DEBUG"
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_BOOT_AUTOCONFIGURE: "DEBUG"
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_CLOUD_CONFIG_SERVER_ENV: "DEBUG"
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_CLOUD_VAULT: "DEBUG"
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_VAULT: "DEBUG"
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_WEB: "INFO"
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_HTTP: "INFO"
+      LOG_DIR: "/app/logs/danipa-config-server"
+
+      # JVM flags (global truststore REMOVED)
       JAVA_TOOL_OPTIONS: >-
-        -XX:+UseContainerSupport
-        -XX:MaxRAMPercentage=75
-        -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005
+        -XX:+UseContainerSupport -XX:MaxRAMPercentage=75
+        -Djdk.tls.client.protocols=TLSv1.2
     volumes:
       - ./config-repo:/config-repo
       - ./logs/config:/app/logs/danipa-config-server
-      - config_secrets:/opt/secrets:ro
+      - ./infra/vault/approle/config-server-dev:/vault/approle:ro
+      - ./infra/vault/tls/vault-root.p12:/opt/truststores/vault-root.p12:ro
+      - ./infra/config-server/tls:/opt/tls:ro
     healthcheck:
-      test: [ "CMD-SHELL","curl -fsS http://127.0.0.1:8088/actuator/health | grep -q 'UP'" ]
+      test: [ "CMD-SHELL","curl -fsS --cacert /opt/tls/root_ca.crt https://127.0.0.1:8088/actuator/health | grep -q '\"status\":\"UP\"'" ]
       interval: 10s
       timeout: 5s
-      retries: 30
+      retries: 60
+      start_period: 60s
     depends_on:
+      keycloak: { condition: service_healthy }
       vault: { condition: service_healthy }
       redis: { condition: service_healthy }
-      config-server-agent: { condition: service_healthy }
-    networks: [ danipa-net ]
-    restart: unless-stopped
-
-  # ----------- Config Server Agent (Vault) -----------
-  config-server-agent:
-    image: hashicorp/vault:1.20.3
-    container_name: config-server-agent
-    entrypoint:
-      - sh
-      - -lc
-      - |
-        set -eu
-        mkdir -p /opt/secrets
-        chmod 0755 /opt/secrets || true
-        chown -R vault:vault /opt/secrets || true
-        (
-          while true; do
-            for f in /opt/secrets/.vault-token /opt/secrets/config-client.env; do
-              [ -f "$$f" ] || continue
-              chown 999:999 "$$f" 2>/dev/null || true
-              chmod 0644 "$$f" 2>/dev/null || true
-            done
-            sleep 1
-          done
-        ) &
-        exec vault agent -config=/vault/agent.hcl -log-level=info
-    environment:
-      VAULT_ADDR: "http://vault:8200"
-      VAULT_APP_PATH: "danipa-config-server,composite"
-    cap_add: [ "IPC_LOCK" ]
-    volumes:
-      - config_secrets:/opt/secrets
-      - ./infra/vault/approle/config-server-dev:/vault/approle:ro
-      - ./infra/vault/templates:/vault/templates:ro
-      - ./infra/vault/agents/config-server-agent.hcl:/vault/agent.hcl:ro
-    healthcheck:
-      test: [ "CMD-SHELL", "test -s /opt/secrets/.vault-token -a -s /opt/secrets/config-client.env" ]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-    depends_on:
-      vault: { condition: service_healthy }
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.config.rule=Host(`config.local.danipa.com`)"
+      - "traefik.http.routers.config.entrypoints=websecure"
+      - "traefik.http.routers.config.tls.certresolver=localacme"
+      - "traefik.http.services.config.loadbalancer.server.port=8088"
+      - "traefik.http.services.config.loadbalancer.server.scheme=https"
+      - "traefik.http.services.config.loadbalancer.serversTransport=stepca@file"
     networks: [ danipa-net ]
     restart: unless-stopped
 
@@ -158,20 +310,46 @@ services:
     container_name: danipa-eureka-server
     ports: [ "8761:8761" ]
     environment:
+      SERVER_PORT: "8761"
       SPRING_PROFILES_ACTIVE: "${APP_ENV:-dev}"
-      SPRING_CONFIG_IMPORT: "optional:configserver:"
-      SPRING_CLOUD_CONFIG_URI: "${SPRING_CLOUD_CONFIG_URI:-http://config-server:8088}"
+      SPRING_CONFIG_IMPORT: "optional:configserver:"          # use Config Server if available
+      SPRING_CLOUD_CONFIG_URI: "${SPRING_CLOUD_CONFIG_URI:-https://config-server:8088}"
       SPRING_APPLICATION_NAME: "danipa-eureka-server"
-      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:-http://eureka-server:8761/eureka}"
+      SPRING_CLOUD_STREAM_KAFKA_BINDER_BROKERS: kafka:9092
+      EUREKA_CLIENT_ENABLED: true
+      EUREKA_CLIENT_REGISTER_WITH_EUREKA: false
+      EUREKA_CLIENT_FETCH_REGISTRY: false
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka/
       LOG_DIR: /app/logs/danipa-eureka-server
+      # Tell the JVM to trust your internal CA
+      JAVA_TOOL_OPTIONS: >-
+        -XX:+UseContainerSupport -XX:MaxRAMPercentage=75
+        -Djavax.net.ssl.trustStore=/opt/truststores/step-root.p12
+        -Djavax.net.ssl.trustStorePassword=changeit
+        -Djavax.net.ssl.trustStoreType=PKCS12
+    # IMPORTANT: source the secrets file that the agent rendered, then exec the image's entrypoint
+    entrypoint:
+      - bash
+      - -lc
+      - |
+        set -euo pipefail
+        set -a
+        if [[ -f /opt/secrets/config-client.env ]]; then
+          source /opt/secrets/config-client.env
+        else
+          echo "WARN: /opt/secrets/config-client.env not found; continuing with baked-in env"
+        fi
+        set +a
+        exec /docker-entrypoint.sh
     volumes:
       - ./logs/eureka:/app/logs/danipa-eureka-server
       - eureka_secrets:/opt/secrets:ro
+      - ./infra/java-truststores:/opt/truststores:ro
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "bash -lc 'exec 3<>/dev/tcp/127.0.0.1/8761; printf \"GET /actuator/health HTTP/1.0\\r\\n\\r\\n\" >&3; head -n 1 <&3 | grep -q \" 200 \"'"
+          "bash -lc 'exec 3<>/dev/tcp/127.0.0.1/8761; printf \"GET ${SERVER_SERVLET_CONTEXT_PATH:-}/actuator/health HTTP/1.0\\r\\n\\r\\n\" >&3; head -n 1 <&3 | grep -q \" 200 \"'"
         ]
       interval: 10s
       timeout: 5s
@@ -179,7 +357,13 @@ services:
     depends_on:
       keycloak: { condition: service_healthy }
       config-server: { condition: service_healthy }
-      eureka-agent: { condition: service_healthy }
+      eureka-agent: { condition: service_healthy }   # ensures /opt/secrets/config-client.env exists
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.eureka.rule=Host(`eureka.local.danipa.com`)"
+      - "traefik.http.routers.eureka.entrypoints=websecure"
+      - "traefik.http.routers.eureka.tls.certresolver=localacme"
+      - "traefik.http.services.eureka.loadbalancer.server.port=8761"
     networks: [ danipa-net ]
     restart: unless-stopped
 
@@ -192,19 +376,25 @@ services:
       - -lc
       - |
         set -eu
-        mkdir -p /opt/secrets
-        chown -R vault:vault /opt/secrets
+        mkdir -p /opt/secrets /run/approle
+        # copy secret_id to a writable spot so the agent can remove it noiselessly
+        cp -f /vault/approle/secret_id /run/approle/secret_id
+        chown -R vault:vault /opt/secrets /run/approle
+        chmod 0400 /run/approle/secret_id
         exec vault agent -config=/vault/agent.hcl -log-level=info
     environment:
-      VAULT_ADDR: "http://vault:8200"
+      VAULT_ADDR: "https://vault:8200"
+      VAULT_CACERT: "/vault/tls/root_ca.crt"
+      VAULT_TLS_SERVER_NAME: "vault.local.danipa.com"
     cap_add: [ "IPC_LOCK" ]
     volumes:
-      - eureka_secrets:/opt/secrets
+      - eureka_secrets:/opt/secrets:rw
       - ./infra/vault/approle/eureka-dev:/vault/approle:ro
       - ./infra/vault/templates:/vault/templates:ro
       - ./infra/vault/agents/eureka-agent.hcl:/vault/agent.hcl:ro
+      - ./infra/vault/tls/root_ca.crt:/vault/tls/root_ca.crt:ro
     healthcheck:
-      test: [ "CMD-SHELL", "test -s /opt/secrets/.vault-token -a -s /opt/secrets/config-client.env" ]
+      test: [ "CMD-SHELL", "test -s /run/agent-token -a -s /opt/secrets/config-client.env" ]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -213,27 +403,43 @@ services:
     networks: [ danipa-net ]
     restart: unless-stopped
 
+
   # ----------- Fintech Service -----------
   fintech-service:
     build:
       context: ./danipa-fintech-service
     container_name: danipa-fintech-service
-    ports: [ "8080:8080", "5005:5005" ]
+    entrypoint: [ "/docker-entrypoint.sh" ]
+    ports: [ "5005:5005" ]
     environment:
       SPRING_PROFILES_ACTIVE: "${APP_ENV:-dev}"
+      SERVER_SERVLET_CONTEXT_PATH: "/ms"
+      ENVIRONMENT: "${APP_ENV:-dev}"
       SPRING_CONFIG_IMPORT: "optional:configserver:"
-      SPRING_CLOUD_CONFIG_URI: "${SPRING_CLOUD_CONFIG_URI:-http://config-server:8088}"
+      SPRING_CLOUD_CONFIG_URI: "${SPRING_CLOUD_CONFIG_URI:-https://config-server:8088}"
       SPRING_APPLICATION_NAME: "danipa-fintech-service"
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:-http://eureka-server:8761/eureka}"
       LOG_DIR: /app/logs/danipa-fintech-service
+
+      # Tell the JVM to trust your internal CA
+      JAVA_TOOL_OPTIONS: >-
+        -XX:+UseContainerSupport -XX:MaxRAMPercentage=75
+        -Djavax.net.ssl.trustStore=/opt/truststores/combined.p12
+        -Djavax.net.ssl.trustStorePassword=changeit
+        -Djavax.net.ssl.trustStoreType=PKCS12
+
+      # Toggle debug cleanly:
+      DEBUG_JDWP: "false"     # set to "true" to enable remote debug
+      DEBUG_PORT: "5005"
     volumes:
       - ./logs/fintech:/app/logs/danipa-fintech-service
       - fintech_secrets:/opt/secrets:ro
+      - ./infra/java-truststores:/opt/truststores:ro
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "bash -lc 'exec 3<>/dev/tcp/127.0.0.1/8080; printf \"GET /actuator/health HTTP/1.0\\r\\n\\r\\n\" >&3; head -n 1 <&3 | grep -q \" 200 \"'"
+          "sh -lc 'exec 3<>/dev/tcp/127.0.0.1/8080; printf \"GET /ms/actuator/health HTTP/1.0\\r\\n\\r\\n\" >&3; head -n 1 <&3 | grep -q \" 200 \"'"
         ]
       interval: 10s
       timeout: 5s
@@ -242,6 +448,12 @@ services:
       eureka-server: { condition: service_healthy }
       config-server: { condition: service_healthy }
       fintech-agent: { condition: service_healthy }
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.fintech.rule=Host(`fintech.local.danipa.com`)"
+      - "traefik.http.routers.fintech.entrypoints=websecure"
+      - "traefik.http.routers.fintech.tls.certresolver=localacme"
+      - "traefik.http.services.fintech.loadbalancer.server.port=8080"
     networks: [ danipa-net ]
     restart: unless-stopped
 
@@ -258,13 +470,17 @@ services:
         chown -R vault:vault /opt/secrets
         exec vault agent -config=/vault/agent.hcl -log-level=info
     environment:
-      VAULT_ADDR: "http://vault:8200"
+      VAULT_ADDR: "https://vault:8200"
+      VAULT_CACERT: "/vault/tls/root_ca.crt"
+      VAULT_TLS_SERVER_NAME: "vault.local.danipa.com"
+      ENVIRONMENT: "${APP_ENV:-dev}"
     cap_add: [ "IPC_LOCK" ]
     volumes:
       - fintech_secrets:/opt/secrets
       - ./infra/vault/approle/fintech-dev:/vault/approle:ro
       - ./infra/vault/templates:/vault/templates:ro
       - ./infra/vault/agents/fintech-agent.hcl:/vault/agent.hcl:ro
+      - ./infra/vault/tls/root_ca.crt:/vault/tls/root_ca.crt:ro
     healthcheck:
       test: [ "CMD-SHELL", "test -s /opt/secrets/.vault-token -a -s /opt/secrets/config-client.env" ]
       interval: 5s
@@ -281,7 +497,7 @@ services:
     profiles: [ "dev" ]
     container_name: danipa-postgres-dev
     environment:
-      POSTGRES_USER: ${POSTGRES_USER_DEV:-danipa_owner_dev}
+      POSTGRES_USER: ${POSTGRES_USER_DEV:-danipa_owner_dev}   # cluster owner login
       POSTGRES_DB: ${POSTGRES_DB_DEV:-danipa_fintech_db_dev}
       POSTGRES_PASSWORD_FILE: /opt/pg-secrets/POSTGRES_PASSWORD
     ports:
@@ -293,7 +509,7 @@ services:
       retries: 10
     volumes:
       - pgdata_dev:/var/lib/postgresql/data
-      - ./init/dev:/docker-entrypoint-initdb.d:ro
+      - ./infra/postgres/init/dev:/docker-entrypoint-initdb.d:ro
       - ./backups/dev:/backups
       - pg_secrets:/opt/pg-secrets:rw
     depends_on:
@@ -313,15 +529,18 @@ services:
         chown -R vault:vault /opt/pg-secrets
         exec vault agent -config=/vault/agent.hcl -log-level=info
     environment:
-      VAULT_ADDR: "http://vault:8200"
+      VAULT_ADDR: "https://vault:8200"
+      VAULT_CACERT: "/vault/tls/root_ca.crt"
+      VAULT_TLS_SERVER_NAME: "vault.local.danipa.com"
     cap_add: [ "IPC_LOCK" ]
     volumes:
       - pg_secrets:/opt/pg-secrets
       - ./infra/vault/approle/fintech-dev:/vault/approle:ro
       - ./infra/vault/templates:/vault/templates:ro
       - ./infra/vault/agents/postgres-agent.hcl:/vault/agent.hcl:ro
+      - ./infra/vault/tls/root_ca.crt:/vault/tls/root_ca.crt:ro
     healthcheck:
-      test: [ "CMD-SHELL","test -s /opt/pg-secrets/POSTGRES_PASSWORD" ]
+      test: ["CMD-SHELL","test -s /opt/pg-secrets/POSTGRES_PASSWORD -a -s /opt/pg-secrets/db-bootstrap.env"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -340,6 +559,8 @@ services:
       PGADMIN_DEFAULT_EMAIL: patrick@danipa.com
       PGADMIN_DEFAULT_PASSWORD: changeMe!
       PGADMIN_LISTEN_PORT: 8081
+      # skip master password screen (optional but handy for dev)
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
     ports:
       - "8081:8081"
     volumes:
@@ -348,9 +569,15 @@ services:
     depends_on:
       postgres-dev:
         condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.pgadmin.rule=Host(`pgadmin.local.danipa.com`)"
+      - "traefik.http.routers.pgadmin.entrypoints=websecure"
+      - "traefik.http.routers.pgadmin.tls.certresolver=localacme"
+      - "traefik.http.services.pgadmin.loadbalancer.server.port=8081"
     networks: [ danipa-net ]
     healthcheck:
-      test: [ "CMD-SHELL", "curl -fsS http://127.0.0.1:8081/misc/ping || exit 1" ]
+      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:8081/misc/ping >/dev/null 2>&1 || exit 1" ]
       interval: 15s
       timeout: 5s
       retries: 20
@@ -361,8 +588,8 @@ services:
     image: docker.elastic.co/logstash/logstash:9.1.3
     container_name: logstash
     expose:
-      - "4560"   # JSON/TCP input for app logs (internal only)
-      - "9600"   # Node API (internal only)
+      - "4560"
+      - "9600"
     volumes:
       - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
       - ./logstash/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
@@ -412,7 +639,6 @@ services:
     volumes:
       - ./kibana/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
     healthcheck:
-      # available once Kibana is up; OK if it takes a while on first boot
       test: [ "CMD-SHELL", "curl -fsS http://127.0.0.1:5601/api/status | grep -q '\"level\":\"available\"'" ]
       interval: 20s
       timeout: 5s
@@ -421,6 +647,12 @@ services:
     depends_on:
       elasticsearch:
         condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.kibana.rule=Host(`kibana.local.danipa.com`)"
+      - "traefik.http.routers.kibana.entrypoints=websecure"
+      - "traefik.http.routers.kibana.tls.certresolver=localacme"
+      - "traefik.http.services.kibana.loadbalancer.server.port=5601"
     networks: [ danipa-net ]
     restart: unless-stopped
 
@@ -469,7 +701,13 @@ volumes:
   pg_secrets:
   eureka_secrets:
   fintech_secrets:
+  acme_storage: {}
+
+secrets:
+  vault_unseal_key:
+    file: ./infra/vault/keys/vault-unseal.key
 
 networks:
   danipa-net:
     driver: bridge
+    external: true

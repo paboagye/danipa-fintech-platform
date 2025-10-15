@@ -1,0 +1,29 @@
+patri@Patrick:/mnt/c/dev/repositories/danipa-fintech-platform$ ./infra/vault/scripts/setup-keycloak.sh
+== Keycloak ==
+Base   : http://localhost:8082
+Realm  : danipa
+Rotate : 0
+
+Creating realm 'danipa'…
+Creating realm role 'config.read'…
+Creating client 'config-server'…
+Granting 'config.read' to service account for 'config-server'…
+Creating client 'eureka-server'…
+Granting 'config.read' to service account for 'eureka-server'…
+Creating client 'danipa-fintech-service'…
+Granting 'config.read' to service account for 'danipa-fintech-service'…
+
+== Realm ==
+Issuer URI : http://localhost:8082/realms/danipa
+JWKS URI   : http://localhost:8082/realms/danipa/protocol/openid-connect/certs
+
+== Client Credentials (store in Vault / env) ==
+CONFIG_SERVER_CLIENT_ID=config-server
+CONFIG_SERVER_CLIENT_SECRET=21GqtCiffwISl1Fsc2ChQFozFL2IdxPl
+EUREKA_SERVER_CLIENT_ID=eureka-server
+EUREKA_SERVER_CLIENT_SECRET=CkPcUZxNveT5chTscgCvD1BIqpo85oJ0
+DANIPA_FINTECH_SERVICE_CLIENT_ID=danipa-fintech-service
+DANIPA_FINTECH_SERVICE_CLIENT_SECRET=bHjDDNcC5GK9NCXwtD2xnMHhORgtX92b
+
+Grant used: realm role '\''config.read'\'' (already ensured).
+patri@Patrick:/mnt/c/dev/repositories/danipa-fintech-platform$

@@ -1,0 +1,22 @@
+#make probe-db-perms \
+#  POSTGRES_CONTAINER=danipa-postgres-${ENV} \
+#  DB_NAME=danipa_fintech_db_${ENV} \
+#  OWNER_ROLE=danipa_owner_${ENV} \
+#  APP_ROLE=danipa_app_${ENV} \
+#  RO_ROLE=danipa_ro_${ENV} \
+#  MIGRATOR_ROLE=danipa_migrator_${ENV} \
+#  APP_SCHEMAS="fintech core payments momo webhooks ops" \
+#  RO_ONLY_SCHEMAS="audit"
+
+
+# dev
+export ENV=dev
+make probe-db-perms \
+  POSTGRES_CONTAINER=danipa-postgres-${ENV} \
+  DB_NAME=danipa_fintech_db_${ENV} \
+  OWNER_ROLE=danipa_owner_${ENV} \
+  APP_ROLE=danipa_app_${ENV} \
+  RO_ROLE=danipa_ro_${ENV} \
+  MIGRATOR_ROLE=danipa_migrator_${ENV} \
+  APP_SCHEMAS="fintech core payments momo webhooks ops" \
+  RO_ONLY_SCHEMAS="audit"

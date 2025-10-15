@@ -34,10 +34,10 @@ case "$ACTION" in
 
       PW_FILE=''
       for f in /home/step/secrets/password /home/step/secrets/ca-password /home/step/secrets/passwd; do
-        [ -s \"\$f\" ] && PW_FILE=\"\$f\" && break
+        [ -s \"\$f\" ] && { PW_FILE=\"\$f\"; break; }
       done
       PW_FLAG=''
-      [ -n \"\$PW_FILE\" ] && PW_FLAG=\"--password-file=\$PW_FILE\"
+      [ -n \"\$PW_FILE\" ] && PW_FLAG=\"--ca-password-file=\$PW_FILE\"
 
       step certificate create \"$CN\" \
         \"\$OUT/server-fullchain.crt\" \"\$OUT/server.key\" \

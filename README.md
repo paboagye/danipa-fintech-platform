@@ -49,8 +49,9 @@ flowchart TB
   end
 
   subgraph Core["Core Platform"]
-    V[(Vault)] --- VA[Vault Agents]
-    CS[Config Server (Vault+Git composite)]
+    V[(Vault)]
+    VA[Vault Agents]
+    CS[Config Server – Vault + Git]
     E[Eureka Server]
     R[(Redis)]
     K[(Kafka / KRaft)]
@@ -61,20 +62,31 @@ flowchart TB
     PGA[pgAdmin]
   end
 
-  F[Fintech Service]:::app
+  F[Fintech Service]
 
-  T -->|TLS / SNI| CS & E & KB & F
-  VA -->|AppRole| CS & F & PG
-  V <-->|Secrets| VA
+  T --> CS
+  T --> E
+  T --> KB
+  T --> F
+
+  V <--> VA
+  VA --> CS
+  VA --> F
+  VA --> PG
+
   CS --> F
   E <--> F
   R --> F
-  K -.Bus refresh .-> CS & F
+
+  K -. Bus refresh .-> CS
+  K -. Bus refresh .-> F
+
   LS --> ES --> KB
-  PG -.optional dev.-> F
+  PG -. dev only .-> F
   PGA --> PG
 
   classDef app fill:#e1f5fe,stroke:#0288d1,stroke-width:2px;
+  class F app;
 ```
 
 **Ingress hostnames (Traefik):**

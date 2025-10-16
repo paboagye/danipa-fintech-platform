@@ -1,5 +1,5 @@
 
-# ![Danipa Logo](images/danipa_logo.png)
+# ![Danipa Logo](https://raw.githubusercontent.com/paboagye/danipa-assets/main/images/danipa_logo.png)
 
 # Danipa Fintech Platform – Application & Vault Management Guide
 

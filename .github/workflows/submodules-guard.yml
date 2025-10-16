@@ -1,0 +1,39 @@
+name: Submodules Guard
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Ensure submodules are clean & pushed
+        run: |
+          set -euo pipefail
+          # Fail on dirty submodules
+          git submodule foreach '
+            if ! git diff --quiet || ! git diff --cached --quiet; then
+              echo "::error::Dirty submodule: $name"; exit 1; fi
+          '
+          # Fail on detached HEAD
+          git submodule foreach '
+            if ! git symbolic-ref -q HEAD >/dev/null; then
+              echo "::error::Detached HEAD in submodule: $name"; exit 1; fi
+          '
+          # Ensure HEADs are on remotes
+          git submodule foreach '
+            BR=$(git rev-parse --abbrev-ref HEAD || echo main)
+            git fetch origin >/dev/null 2>&1 || true
+            L=$(git rev-parse HEAD); R=$(git rev-parse origin/$BR 2>/dev/null || echo "")
+            if [ -z "$R" ] || [ "$L" != "$R" ]; then
+              echo "::error::$name not pushed to origin/$BR"; exit 1; fi
+          '
+      - name: Block tracked build output
+        run: |
+          set -euo pipefail
+          bad=$(git ls-files | grep -E '(^|/)target/'); if [ -n "${bad:-}" ]; then
+            echo "::error::Build artifacts tracked: $bad"; exit 1; fi

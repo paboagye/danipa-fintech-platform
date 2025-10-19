@@ -224,6 +224,9 @@ services:
     build:
       context: ./danipa-config-server
       dockerfile: Dockerfile
+      args:
+        GIT_BRANCH: ${GIT_BRANCH:-local}
+        GIT_COMMIT: ${GIT_COMMIT:-dev}
     container_name: danipa-config-server
     ports: [ "8088:8088" ]
     environment:
@@ -307,6 +310,10 @@ services:
   eureka-server:
     build:
       context: ./danipa-eureka-server
+      dockerfile: Dockerfile
+      args:
+        GIT_BRANCH: ${GIT_BRANCH:-local}
+        GIT_COMMIT: ${GIT_COMMIT:-dev}
     container_name: danipa-eureka-server
     ports: [ "8761:8761" ]
     environment:
@@ -408,6 +415,10 @@ services:
   fintech-service:
     build:
       context: ./danipa-fintech-service
+      dockerfile: Dockerfile
+      args:
+        GIT_BRANCH: ${GIT_BRANCH:-local}
+        GIT_COMMIT: ${GIT_COMMIT:-dev}
     container_name: danipa-fintech-service
     entrypoint: [ "/docker-entrypoint.sh" ]
     ports: [ "5005:5005" ]
@@ -500,16 +511,19 @@ services:
       POSTGRES_USER: ${POSTGRES_USER_DEV:-danipa_owner_dev}   # cluster owner login
       POSTGRES_DB: ${POSTGRES_DB_DEV:-danipa_fintech_db_dev}
       POSTGRES_PASSWORD_FILE: /opt/pg-secrets/POSTGRES_PASSWORD
+      VAULT_ADDR: "https://vault.local.danipa.com:8200"
     ports:
       - "${PG_PORT_DEV:-5433}:5432"
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h localhost" ]
-      interval: 10s
-      timeout: 5s
+      test: [ "CMD-SHELL", "/vault/scripts/db-bootstrap-check.sh" ]
+      interval: 15s
+      timeout: 7s
       retries: 10
     volumes:
       - pgdata_dev:/var/lib/postgresql/data
       - ./infra/postgres/init/dev:/docker-entrypoint-initdb.d:ro
+      - ./infra/postgres/scripts:/vault/scripts:ro
+      - ./infra/vault/tls/root_ca.crt:/vault/tls/root_ca.crt:ro
       - ./backups/dev:/backups
       - pg_secrets:/opt/pg-secrets:rw
     depends_on:

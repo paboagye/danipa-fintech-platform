@@ -1,15 +1,9 @@
-<p align="center">
-  <img src="docs/img/makefile-banner-dark.png" alt="Danipa Makefile Suite" width="80%"/>
-</p>
+# ![Danipa Logo](https://raw.githubusercontent.com/paboagye/danipa-assets/main/images/danipa_logo.png)
 
-<h1 align="center">Danipa Fintech Platform — Modular Makefile Suite</h1>
+# 🧭 Danipa Fintech Platform — Modular Makefile Suite
+The Makefile suite organizes build, deployment, and maintenance tasks for the Danipa Fintech Platform. It uses modular includes for features like Docker, Vault, database operations, ELK stack, health checks, and more, providing a clear structure, composability, and categorized help output for developers.
 
-<p align="center">
-  <img src="docs/img/danipa_logo.png" alt="Danipa" height="54"/>
-</p>
-
-> **Goal:** split the monolithic `Makefile` into small, focused modules included from a thin root file.
-> This mirrors the new `db-health` pattern and keeps targets discoverable, maintainable, and reusable.
+# ![Danipa Logo](https://raw.githubusercontent.com/paboagye/danipa-assets/main/images/makefile-banner-dark.png)
 
 ---
 
@@ -129,7 +123,8 @@ make es-snapshot-create
 ## 🆘 Troubleshooting
 
 - **Clock skew warnings** when editing on Windows → run:  
-  `sed -i 's/$//' infra/makefile/*.mk`
+  `sed -i 's/
+$//' infra/makefile/*.mk`
 - **Compose service not found** → verify service keys in `docker-compose.yml`
 - **Vault TLS issues** → confirm CA file and `--resolve` pins in scripts
 

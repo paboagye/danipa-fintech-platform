@@ -36,8 +36,6 @@ The platform wires together the core building blocks required for **secure, conf
 - **Data/Cache/Messaging** via **Postgres**, **Redis**, **Kafka (KRaft)**.
 - **Observability** via **Actuator**, **Micrometer**, **Elasticsearch + Logstash + Kibana**.
 
-> This supersedes older, Git‑only config and non‑TLS paths. The README keeps the same TOC but modernizes the stack and operations.
-
 ---
 
 <h2 id="architecture">🏗️ Architecture</h2>
@@ -220,6 +218,7 @@ git submodule update --init --recursive
 - `danipa-config-server`
 - `danipa-eureka-server`
 - `danipa-fintech-service`
+- `danipa-fintech-documents`
 
 ---
 

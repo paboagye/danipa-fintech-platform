@@ -517,6 +517,7 @@ services:
     networks: [ danipa-net ]
     restart: unless-stopped
 
+  # ----------- Postgres Agent (Vault) -----------
   postgres-agent:
     image: hashicorp/vault:1.20.3
     container_name: postgres-agent
@@ -539,10 +540,11 @@ services:
       - ./infra/vault/templates:/vault/templates:ro
       - ./infra/vault/agents/postgres-agent.hcl:/vault/agent.hcl:ro
       - ./infra/vault/tls/root_ca.crt:/vault/tls/root_ca.crt:ro
+      - ./infra/vault/scripts:/vault/scripts:ro
     healthcheck:
-      test: ["CMD-SHELL","test -s /opt/pg-secrets/POSTGRES_PASSWORD -a -s /opt/pg-secrets/db-bootstrap.env"]
-      interval: 5s
-      timeout: 3s
+      test: [ "CMD-SHELL", "/vault/scripts/db-bootstrap-check.sh" ]
+      interval: 10s
+      timeout: 5s
       retries: 20
     depends_on:
       vault: { condition: service_healthy }

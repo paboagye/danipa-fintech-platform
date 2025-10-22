@@ -1,13 +1,13 @@
 {
-  "Servers": {
-    "1": {
-      "Group": "Danipa",
-      "Name": "Postgres-Dev",
-      "Host": "danipa-postgres-dev",
-      "Port": 5432,
-      "MaintenanceDB": "danipa_fintech_db_dev",
-      "Username": "danipa_owner_dev",
-      "SSLMode": "prefer"
-    }
-  }
+"Servers": {
+"1": {
+"Group": "Danipa",
+"Name": "Postgres-Dev",
+"Host": "danipa-postgres-dev",
+"Port": 5432,
+"MaintenanceDB": "danipa_fintech_db_dev",
+"Username": "danipa_owner_dev",
+"SSLMode": "prefer"
+}
+}
 }

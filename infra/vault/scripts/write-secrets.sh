@@ -6,6 +6,8 @@
 # - Verifies policies & AppRoles; mints per-env composite token; fintech/eureka policies.
 # - validate_composite() ensures each composite[N] has a "type".
 # - Writes freshly minted composite token back into <env>.json (seed file) so it always reflects latest.
+# - Mirrors composite from danipa-config-server,composite -> danipa/config,composite (no seed duplication).
+# - MERGE-ON-WRITE: vault values are merged with existing data instead of overwritten.
 # -------------------------------------------------------------------------------------------------
 set -euo pipefail
 
@@ -80,6 +82,7 @@ PY
   echo "KV v2 ready at mount '$MOUNT'."
 }
 
+# Basic write (kept for completeness; we now primarily use merge)
 write_secret() {
   local path="$1"; local data_json="$2"
   if [ "$DRY_RUN" = "true" ]; then
@@ -90,6 +93,42 @@ write_secret() {
     echo "WROTE: $MOUNT/data/$path"
   fi
   print_masked "$data_json"
+}
+
+# MERGE-ON-WRITE: read existing -> merge (new wins) -> write back
+write_secret_merge() {
+  local path="$1"; local new_json="$2"
+  local get existing merged
+  # read existing
+  get="$(vcurl "$VAULT_ADDR/v1/$MOUNT/data/$path" || true)"
+  existing="$(python3 - "$get" <<'PY'
+import sys, json
+raw = sys.argv[1]
+try:
+    d = json.loads(raw) if raw.strip() else {}
+    print(json.dumps((d.get("data") or {}).get("data") or {}))
+except Exception:
+    print("{}")
+PY
+)"
+  # shallow merge: existing + new (new overrides)
+  merged="$(python3 - "$existing" "$new_json" <<'PY'
+import sys, json
+ex = json.loads(sys.argv[1]) if sys.argv[1].strip() else {}
+nw = json.loads(sys.argv[2]) if sys.argv[2].strip() else {}
+ex.update(nw)
+print(json.dumps(ex, separators=(",",":")))
+PY
+)"
+  # write merged
+  if [ "$DRY_RUN" = "true" ]; then
+    echo "[DRYRUN] WOULD MERGE-WRITE $MOUNT/data/$path"
+  else
+    vcurl -H 'Content-Type: application/json' \
+      -X POST "$VAULT_ADDR/v1/$MOUNT/data/$path" -d "{\"data\":$merged}" -o /dev/null
+    echo "WROTE (MERGED): $MOUNT/data/$path"
+  fi
+  print_masked "$merged"
 }
 
 seed_health_probe() {
@@ -355,18 +394,29 @@ PY
     if [[ "$P" == "danipa-config-server/composite" ]]; then
       P="danipa-config-server,composite"
     fi
-    write_secret "$P" "$DATA"
+
+    # MERGE write for primary path
+    write_secret_merge "$P" "$DATA"
+
+    # Mirror composite to the live read path (no duplication in seeds)
+    if [[ "$P" == "danipa-config-server,composite" ]]; then
+      write_secret_merge "danipa/config,composite" "$DATA"
+    fi
+
+    # Normalize / mirror env suffixes (comma form)
     if [[ "$P" =~ ^([^,]+)/(dev|staging|prod|composite)$ ]]; then
       base="${BASH_REMATCH[1]}"; envp="${BASH_REMATCH[2]}"
-      write_secret "${base},${envp}" "$DATA"
+      write_secret_merge "${base},${envp}" "$DATA"
     fi
+
+    # Optional: also keep slash form in sync if MIRROR_MODE=both
     if [ "$MIRROR_MODE" = "both" ]; then
       if [[ "$P" == *","* ]]; then
-        P_SLASH="${P/,//}"; write_secret "$P_SLASH" "$DATA"
+        P_SLASH="${P/,//}"; write_secret_merge "$P_SLASH" "$DATA"
       elif [[ "$P" == */* ]]; then
         base="${P%/*}"; tail="${P##*/}"
         if [[ "$tail" =~ ^(dev|staging|prod|composite)$ ]]; then
-          write_secret "${base},${tail}" "$DATA"
+          write_secret_merge "${base},${tail}" "$DATA"
         fi
       fi
     fi
@@ -376,6 +426,11 @@ PY
   cleanup_service_composites "danipa-fintech-service"
   cleanup_service_composites "danipa-eureka-server"
   validate_composite "$env"
+
+  # Sanity check that the mirrored path is readable
+  vcurl "$VAULT_ADDR/v1/$MOUNT/data/danipa/config,composite" >/dev/null || {
+    echo "WARN: danipa/config,composite not readable right after write"
+  }
 done
 
 # ---- POLICIES + APPROLE (config-server) ----
@@ -477,7 +532,7 @@ path "secret/data/danipa-fintech-service,{env}"    { capabilities = ["read","upd
 path "secret/data/danipa-fintech-service/*"        { capabilities = ["read","update","create","delete"] }
 '
 
-# --- NEW: write back to the seed file with the fresh composite token ---
+# --- write back to the seed file with the fresh composite token ---
 update_seed_json() {
   local env="$1"; local token="$2"
   local seed="$SEEDS_DIR/$env.json"
@@ -495,7 +550,6 @@ data = json.loads(seed.read_text(encoding="utf-8-sig"))
 paths = data.setdefault("paths", {})
 comp  = paths.setdefault("danipa-config-server,composite", {})
 comp["spring.cloud.config.server.composite[0].token"] = tok
-# pretty, deterministic-ish
 seed.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 print(f"UPDATED seed: {seed} with composite token ({tok[:4]}…{tok[-4:]})")
 PY
@@ -546,8 +600,9 @@ m["spring.cloud.config.server.composite[0].token"] = sys.argv[2]
 print(json.dumps(m,separators=(",",":")))
 PY
 )"
-
-  write_secret "danipa-config-server,composite" "$merged"
+  write_secret_merge "danipa-config-server,composite" "$merged"
+  # keep the live read-path in sync
+  write_secret_merge "danipa/config,composite" "$merged"
 
   # 3) Also persist token to the corresponding seed JSON file
   update_seed_json "$env" "$tok"
@@ -658,7 +713,7 @@ for env in "${envs[@]}"; do
   out="$(upsert_approle "$FIN_ROLE" "pg-read,$FIN_POLICY" "1h" "24h")"
   RID="$(printf '%s\n' "$out" | sed -n '1p')"
   SID="$(printf '%s\n' "$out" | sed -n '2p')"
-  echo "AppRole $FIN_ROLE ensured with policies: pg-read,$FIN_POLICY"
+  echo "AppRole $FIN_ROLE ensured with policies: pg-read,${FIN_POLICY}"
   if [ "$DRY_RUN" != "true" ]; then
     d="infra/vault/approle/fintech-${env}"
     mkdir -p "$d"

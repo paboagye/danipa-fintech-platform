@@ -46,7 +46,7 @@ build-config: ## Build config-server image with its own git metadata
 show-config-git: ## Show git info detected for config-server
 	$(call show_git,danipa-config-server)
 
-##@ Config Server (Actuator (inside container, HTTPS + CA)
+##@ Config Server (Actuator inside container, HTTPS + CA)
 # ---- Actuator (inside container, HTTPS + CA) ----
 .PHONY: config-act-health
 config-act-health: ## GET $(CONFIG_INT_URL)/actuator/health (inside)
@@ -82,7 +82,7 @@ config-busrefresh: ## POST $(CONFIG_INT_URL)/actuator/busrefresh (inside)
 	@$(COMPOSE) exec $(CONFIG_SERVICE) sh -lc '\
 	  curl -sS -i $(INT_FLAGS) -u $(ACT_USER):$(ACT_PASS) -X POST "$(CONFIG_INT_URL)/actuator/busrefresh" || true'
 
-##@ Config Server (external)
+##@ Config Server (Actuator external)
 
 # You probably want to hit Traefik domain from the host:
 #   make config-ext-info CONFIG_ACT_EXT_BASE=https://config.local.danipa.com USE_CUSTOM_CA=1 CA_CERT=infra/step/root_ca.crt

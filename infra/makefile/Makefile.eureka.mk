@@ -41,6 +41,7 @@ build-eureka: ## Build eureka-server image with its own git metadata
 show-eureka-git: ## Show git info detected for eureka-server
 	$(call show_git,danipa-eureka-server)
 
+##@ Eureka Server (Actuator inside)
 # ---- Actuator (inside container) ----
 .PHONY: eureka-act-health
 eureka-act-health: ## GET $(EUREKA_INT_URL)/actuator/health (inside)
@@ -66,7 +67,7 @@ eureka-act-metrics: ## GET $(EUREKA_INT_URL)/actuator/metrics (inside)
 	  resp=$$(curl -sS $(CURL_INT_FLAGS) -u $(ACT_USER):$(ACT_PASS) "$(EUREKA_INT_URL)/actuator/metrics" || true); \
 	  if command -v jq >/dev/null 2>&1; then printf "%s" "$$resp" | jq -Rr '\''fromjson? // .'\''; else printf "%s\n" "$$resp"; fi'
 
-##@ Eureka Server (external)
+##@ Eureka Server (Actuator external)
 
 EUREKA_ACT_EXT_BASE ?= $(EUREKA_URL)
 

@@ -3,18 +3,5 @@
   <component name="SqlDialectMappings">
     <file url="file://$PROJECT_DIR$/danipa-fintech-service/src/main/resources/db/callbacks/afterMigrate__diagnostics.sql" dialect="GenericSQL" />
     <file url="file://$PROJECT_DIR$/danipa-fintech-service/src/main/resources/db/callbacks/beforeMigrate__set_ctx_and_check_secrets.sql" dialect="GenericSQL" />
-    <file url="file://$PROJECT_DIR$/danipa-fintech-service/src/main/resources/db/migration/common/V10__indexes.sql" dialect="GenericSQL" />
-    <file url="file://$PROJECT_DIR$/danipa-fintech-service/src/main/resources/db/migration/common/V1__roles_and_users.sql" dialect="GenericSQL" />
-    <file url="file://$PROJECT_DIR$/danipa-fintech-service/src/main/resources/db/migration/common/V2__core_extensions.sql" dialect="GenericSQL" />
-    <file url="file://$PROJECT_DIR$/danipa-fintech-service/src/main/resources/db/migration/common/V3__logical_schemas.sql" dialect="GenericSQL" />
-    <file url="file://$PROJECT_DIR$/danipa-fintech-service/src/main/resources/db/migration/common/V4__core_tables.sql" dialect="GenericSQL" />
-    <file url="file://$PROJECT_DIR$/danipa-fintech-service/src/main/resources/db/migration/common/V5__payments_tables.sql" dialect="GenericSQL" />
-    <file url="file://$PROJECT_DIR$/danipa-fintech-service/src/main/resources/db/migration/common/V6__momo_tables.sql" dialect="GenericSQL" />
-    <file url="file://$PROJECT_DIR$/danipa-fintech-service/src/main/resources/db/migration/common/V7__webhooks_tables.sql" dialect="GenericSQL" />
-    <file url="file://$PROJECT_DIR$/danipa-fintech-service/src/main/resources/db/migration/common/V8__audit_and_triggers.sql" dialect="GenericSQL" />
-    <file url="file://$PROJECT_DIR$/danipa-fintech-service/src/main/resources/db/migration/common/V9__rls_policies_and_grants.sql" dialect="GenericSQL" />
-    <file url="file://$PROJECT_DIR$/danipa-fintech-service/src/main/resources/db/migration/dev/V11__seed_data_dev.sql" dialect="GenericSQL" />
-    <file url="file://$PROJECT_DIR$/danipa-fintech-service/src/main/resources/db/migration/prod/V11__seed_data_prod.sql" dialect="GenericSQL" />
-    <file url="file://$PROJECT_DIR$/danipa-fintech-service/src/main/resources/db/migration/staging/V11__seed_data_stg.sql" dialect="GenericSQL" />
   </component>
 </project>

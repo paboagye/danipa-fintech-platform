@@ -14,3 +14,7 @@
 	branch = main
 	path = danipa-fintech-documents
 	url = git@github.com:paboagye/danipa-fintech-documents.git
+[submodule "danipa-webhook-ingress"]
+	path = danipa-webhook-ingress
+	url = git@github.com:paboagye/danipa-webhook-ingress.git
+	branch = main
